@@ -16,9 +16,6 @@
 </head>
 <body>
   
-  <!-- ═══════════════════════════════════════
-       OPENING ANIMATION
-  ═══════════════════════════════════════ -->
   <div id="openingScreen" class="opening-screen">
     <div class="opening-inner">
       <div class="opening-trio">
@@ -26,7 +23,6 @@
         <span class="trio-dot d2"></span>
         <span class="trio-dot d3"></span>
       </div>
-      
       <h1 class="opening-title">
         <span style="--i:0">C</span>
         <span style="--i:1">A</span>
@@ -35,23 +31,16 @@
         <span style="--i:4">O</span>
         <span style="--i:5">M</span>
       </h1>
-      
       <p class="opening-tag">PLAY • WITH • FRIENDS</p>
-      
       <div class="opening-bar">
         <div class="opening-bar-fill" id="openingBarFill"></div>
       </div>
     </div>
-    
     <div class="opening-hint">TAP TO CONTINUE</div>
   </div>
 
-  <!-- ═══════════════════════════════════════
-       MAIN MENU
-  ═══════════════════════════════════════ -->
   <div id="mainMenu" class="main-menu hidden">
     <div class="menu-inner">
-      
       <div class="menu-top">
         <div class="brand-dots">
           <span></span><span></span><span></span>
@@ -60,7 +49,6 @@
         <p class="menu-sub">Play with two friends</p>
       </div>
 
-      <!-- TWO PRIMARY ACTIONS -->
       <div class="menu-actions">
         <button class="action-primary create-action" id="createRoomBtn">
           <span class="ap-icon">＋</span>
@@ -86,29 +74,20 @@
     </div>
   </div>
 
-  <!-- ═══════════════════════════════════════
-       CREATE ROOM MODAL (Host)
-  ═══════════════════════════════════════ -->
   <div id="createModal" class="modal-overlay hidden">
     <div class="modal-box">
       <button class="modal-x" id="createClose">✕</button>
       
-      <!-- YOU ARE ALWAYS READY -->
       <div class="you-card">
-        <div class="you-avatar" style="background:#e63946">
-          <span>1</span>
-        </div>
+        <div class="you-avatar" style="background:#e63946"><span>1</span></div>
         <div class="you-info">
           <div class="you-name">YOU</div>
           <div class="you-status">✓ READY</div>
         </div>
       </div>
 
-      <div class="invite-divider">
-        <span>INVITE 2 FRIENDS</span>
-      </div>
+      <div class="invite-divider"><span>INVITE 2 FRIENDS</span></div>
 
-      <!-- Friend slots -->
       <div class="friend-slots" id="friendSlots">
         <div class="friend-slot" data-slot="2">
           <div class="fs-avatar empty">2</div>
@@ -126,7 +105,6 @@
         </div>
       </div>
 
-      <!-- Number room code -->
       <div class="code-block">
         <div class="code-label">ROOM NUMBER</div>
         <div class="code-row">
@@ -150,9 +128,7 @@
         </button>
       </div>
 
-      <div class="waiting-hint" id="waitingHint">
-        Waiting for friends to join...
-      </div>
+      <div class="waiting-hint" id="waitingHint">Waiting for friends to join...</div>
 
       <button class="start-btn" id="startGameBtn" disabled>
         <span id="startBtnText">NEED 2 MORE PLAYERS</span>
@@ -160,9 +136,6 @@
     </div>
   </div>
 
-  <!-- ═══════════════════════════════════════
-       JOIN ROOM MODAL (Client)
-  ═══════════════════════════════════════ -->
   <div id="joinModal" class="modal-overlay hidden">
     <div class="modal-box modal-small">
       <button class="modal-x" id="joinClose">✕</button>
@@ -193,9 +166,6 @@
     </div>
   </div>
 
-  <!-- ═══════════════════════════════════════
-       CONNECTING OVERLAY
-  ═══════════════════════════════════════ -->
   <div id="connectingOverlay" class="connecting-overlay hidden">
     <div class="connecting-inner">
       <div class="connecting-dots">
@@ -205,23 +175,17 @@
     </div>
   </div>
 
-  <!-- ═══════════════════════════════════════
-       GAME SCREEN
-  ═══════════════════════════════════════ -->
   <div id="gameScreen" class="game-screen hidden">
-    
     <div class="game-topbar">
       <button class="top-btn" id="backBtn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <polyline points="15 18 9 12 15 6"/>
         </svg>
       </button>
-      
       <div class="top-center">
         <span class="live-dot"></span>
         <span id="gameModeText">LIVE</span>
       </div>
-      
       <button class="top-btn" id="soundToggle">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="soundOnIcon">
           <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
@@ -290,12 +254,8 @@
         <h2 class="go-heading" id="goHeading">VICTORY!</h2>
         <p class="go-text" id="goText">Player wins</p>
         <div class="go-scores" id="goScores"></div>
-        <button class="start-btn" id="playAgainBtn">
-          <span>PLAY AGAIN</span>
-        </button>
-        <button class="ghost-btn" id="goMenuBtn">
-          <span>MAIN MENU</span>
-        </button>
+        <button class="start-btn" id="playAgainBtn"><span>PLAY AGAIN</span></button>
+        <button class="ghost-btn" id="goMenuBtn"><span>MAIN MENU</span></button>
       </div>
     </div>
   </div>
