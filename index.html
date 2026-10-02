@@ -196,6 +196,22 @@
     <div class="board-wrap">
       <div class="board-frame" id="boardFrame">
         <canvas id="gameCanvas" width="700" height="700"></canvas>
+        <!-- WAIT OVERLAY -->
+        <div class="wait-overlay hidden" id="waitOverlay">
+          <div class="wait-inner">
+            <div class="wait-icon">⏳</div>
+            <div class="wait-title" id="waitTitle">WAIT...</div>
+            <div class="wait-sub" id="waitSub">Player P2 is playing</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADJUST STRIKER SLIDER -->
+    <div class="adjust-row hidden" id="adjustRow">
+      <span class="adjust-label">MOVE</span>
+      <div class="adjust-track" id="adjustTrack">
+        <div class="adjust-thumb" id="adjustThumb"></div>
       </div>
     </div>
 
