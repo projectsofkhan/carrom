@@ -1,23 +1,21 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P • v9
-   • Striker pockets (foul = −20)
-   • First to 100 wins
-   • Solid flat colors, pure white bg
-   • Two Player on One Screen added
-   • Striker adjuster skips puck overlap zones
-   • 3 Player on One Screen (formerly "Practice Solo")
+   CARROM 3P • v10
+   • Full square board, wooden frame, pockets inside play field
+   • Puck & striker designs (rings, caps, bevels)
+   • Snappy turn handoff (~220ms after motion stops)
+   • Keeps: striker foul −20, first to 100, 2P/3P local,
+            quick-chat dropdown, aim-from-anywhere, slider skips pucks
 ═══════════════════════════════════════════════════════════ */
 
 const WIN_SCORE = 100;
 const STRIKER_FOUL = -20;
 
 const GAME = {
-  mode: 'menu',             // menu | host | join | local | playing
+  mode: 'menu',
   myPlayerIndex: 0,
   currentTurn: 0,
   isHost: false,
-  // local-only flags
-  localMode: null,          // null | 'practice3p' | 'local2p'
+  localMode: null,
   isPractice: false,
   roomCode: null,
   players: [
@@ -25,7 +23,7 @@ const GAME = {
     { id: null, connected: false, score: 0 },
     { id: null, connected: false, score: 0 }
   ],
-  activePlayers: 3,         // 2 for local 2P
+  activePlayers: 3,
   audioEnabled: true,
   soundVolume: 0.55
 };
@@ -100,7 +98,6 @@ const AudioManager = {
           this.tone(ctx, out, 1320, 880, 'sine', 0.22, 0.22);
           break;
         case 'striker_pocket':
-          // lower, ominous double-thud
           this.tone(ctx, out, 180, 70, 'square', 0.3, 0.55);
           this.tone(ctx, out, 120, 55, 'sawtooth', 0.36, 0.4);
           this.melody(ctx, out, [320, 200], 0.12, 0.32);
@@ -166,19 +163,19 @@ const AudioManager = {
   }
 };
 
-/* ───────── NETWORK (unchanged) ───────── */
+/* ───────── NETWORK ───────── */
 const Network = {
   peer: null, connections: [], isHost: false, roomCode: null,
   onData: null, onError: null, onPeerJoin: null, onPeerLeave: null,
 
   generateCode() { return String(Math.floor(1000 + Math.random() * 9000)); },
-  generateClientId() { return 'c9-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
+  generateClientId() { return 'c10-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
 
   initHost(cb) {
     this.isHost = true;
     this.roomCode = this.generateCode();
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const peerId = 'c9-' + this.roomCode;
+    const peerId = 'c10-' + this.roomCode;
     return new Promise((resolve, reject) => {
       let settled = false, attempts = 0;
       const maxAttempts = 6;
@@ -225,7 +222,7 @@ const Network = {
     this.isHost = false;
     this.roomCode = roomCode;
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const hostPeerId = 'c9-' + roomCode;
+    const hostPeerId = 'c10-' + roomCode;
     const clientId = this.generateClientId();
     return new Promise((resolve, reject) => {
       let settled = false, retries = 0;
@@ -320,26 +317,33 @@ const Network = {
 const Physics = {
   W: 700, H: 700,
   BOARD_PADDING: 62,
+  PLAY_INSET: 14,
   PUCK_RADIUS: 17,
   STRIKER_RADIUS: 24,
   POCKET_RADIUS: 46,
-  FRICTION: 0.989,
+  POCKET_INSET: 46,
+  FRICTION: 0.990,
   WALL_BOUNCE: 0.8,
-  MIN_SPEED: 0.05,
+  MIN_SPEED: 0.08,
   MAX_POWER: 26,
   RESTITUTION: 0.94,
 
   pockets: [], pucks: [], striker: null,
 
   init() {
-    const p = this.BOARD_PADDING;
+    const inset = this.POCKET_INSET;
     this.pockets = [
-      { x: p, y: p }, { x: this.W - p, y: p },
-      { x: p, y: this.H - p }, { x: this.W - p, y: this.H - p }
+      { x: inset, y: inset },
+      { x: this.W - inset, y: inset },
+      { x: inset, y: this.H - inset },
+      { x: this.W - inset, y: this.H - inset }
     ];
   },
 
-  bounds() { const p = this.BOARD_PADDING; return { left: p, right: this.W - p, top: p, bottom: this.H - p }; },
+  bounds() {
+    const p = this.BOARD_PADDING;
+    return { left: p, right: this.W - p, top: p, bottom: this.H - p };
+  },
 
   getBaseline(i) {
     const p = this.BOARD_PADDING;
@@ -357,18 +361,21 @@ const Physics = {
     const cx = this.W / 2, cy = this.H / 2;
     for (let i = 0; i < 9; i++) {
       const a = (i / 9) * Math.PI * 2 - Math.PI / 2;
-      pucks.push({ x: cx + Math.cos(a) * 58, y: cy + Math.sin(a) * 58, vx: 0, vy: 0,
-        radius: this.PUCK_RADIUS, color: '#f3e3bd', rim: '#c19a52',
-        type: 'white', points: POINTS.white, active: true, trail: [] });
+      const r = 58 + ((i % 3) - 1) * 0.6;
+      pucks.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, vx: 0, vy: 0,
+        radius: this.PUCK_RADIUS, color: '#f3e3bd', rim: '#c19a52', cap: '#e6c78a',
+        type: 'white', points: POINTS.white, active: true, trail: [], spin: 0 });
     }
     for (let i = 0; i < 9; i++) {
       const a = (i / 9) * Math.PI * 2 + 0.35;
-      pucks.push({ x: cx + Math.cos(a) * 30, y: cy + Math.sin(a) * 30, vx: 0, vy: 0,
-        radius: this.PUCK_RADIUS, color: '#1a1a1a', rim: '#000',
-        type: 'black', points: POINTS.black, active: true, trail: [] });
+      const r = 30 + ((i % 3) - 1) * 0.5;
+      pucks.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, vx: 0, vy: 0,
+        radius: this.PUCK_RADIUS, color: '#1a1a1a', rim: '#000', cap: '#4a4a4a',
+        type: 'black', points: POINTS.black, active: true, trail: [], spin: 0 });
     }
     pucks.push({ x: cx, y: cy, vx: 0, vy: 0, radius: this.PUCK_RADIUS,
-      color: '#f3e3bd', rim: '#c19a52', type: 'white', points: POINTS.white, active: true, trail: [] });
+      color: '#f3e3bd', rim: '#c19a52', cap: '#e6c78a',
+      type: 'white', points: POINTS.white, active: true, trail: [], spin: 0 });
     return pucks;
   },
 
@@ -377,7 +384,8 @@ const Physics = {
     let x, y;
     if (base.axis === 'x') { x = base.min + (base.max - base.min) * sideOffset; y = base.y; }
     else { x = base.x; y = base.min + (base.max - base.min) * sideOffset; }
-    const s = { x, y, vx: 0, vy: 0, radius: this.STRIKER_RADIUS, color: PLAYER_COLORS[i], type: 'striker', active: true, trail: [] };
+    const s = { x, y, vx: 0, vy: 0, radius: this.STRIKER_RADIUS, color: PLAYER_COLORS[i],
+      type: 'striker', active: true, trail: [] };
     this.separateFromPucks(s);
     return s;
   },
@@ -401,24 +409,20 @@ const Physics = {
     }
   },
 
-  /* Check if striker at (x,y) would collide with any puck */
   strikerOverlapsPuck(x, y, extraMargin = 4) {
     for (const puck of this.pucks) {
       if (!puck.active) continue;
       const dx = x - puck.x, dy = y - puck.y;
       const d = Math.hypot(dx, dy);
-      const minD = this.STRIKER_RADIUS + puck.radius + extraMargin;
-      if (d < minD) return true;
+      if (d < this.STRIKER_RADIUS + puck.radius + extraMargin) return true;
     }
     return false;
   },
 
-  /* Given an axis position pct [0..1], find a legal slot that doesn't overlap a puck. */
   findFreeBaselinePos(playerIndex, targetPct) {
     const base = this.getBaseline(playerIndex);
     const min = base.min, max = base.max;
     const span = max - min;
-    // try target first
     const tryPct = (p) => {
       const clamped = Math.max(0, Math.min(1, p));
       const pos = min + span * clamped;
@@ -428,13 +432,11 @@ const Physics = {
       return null;
     };
     let r = tryPct(targetPct); if (r) return r;
-    // scan outward in small steps
     const step = 0.01;
     for (let d = step; d <= 1; d += step) {
       r = tryPct(targetPct + d); if (r) return r;
       r = tryPct(targetPct - d); if (r) return r;
     }
-    // no legal slot — return the original clamped
     const clamped = Math.max(0, Math.min(1, targetPct));
     const pos = min + span * clamped;
     return {
@@ -528,8 +530,8 @@ const Physics = {
   },
 
   allStopped() {
-    if (this.striker && this.striker.active && Math.hypot(this.striker.vx, this.striker.vy) > 0.01) return false;
-    for (const p of this.pucks) if (p.active && Math.hypot(p.vx, p.vy) > 0.01) return false;
+    if (this.striker && this.striker.active && Math.hypot(this.striker.vx, this.striker.vy) > 0.02) return false;
+    for (const p of this.pucks) if (p.active && Math.hypot(p.vx, p.vy) > 0.02) return false;
     return true;
   },
 
@@ -555,7 +557,7 @@ const Physics = {
   }
 };
 
-/* ───────── RENDERER (flat solid colors) ───────── */
+/* ───────── RENDERER ───────── */
 const Renderer = {
   canvas: null, ctx: null, W: 700, H: 700, time: 0, pocketPops: [],
 
@@ -583,46 +585,111 @@ const Renderer = {
     const ctx = this.ctx, p = Physics.BOARD_PADDING;
     const w = this.W - p * 2, h = this.H - p * 2;
 
-    // Solid wooden surround (flat)
-    ctx.fillStyle = '#d9b678';
-    this.roundRect(ctx, 0, 0, this.W, this.H, 34); ctx.fill();
+    ctx.fillStyle = '#8b5a2b';
+    ctx.fillRect(0, 0, this.W, this.H);
 
-    // Flat playing surface
-    ctx.fillStyle = '#fffdf6';
-    this.roundRect(ctx, p - 10, p - 10, w + 20, h + 20, 18); ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.08)';
+    for (let i = 0; i < 7; i++) {
+      const y = 8 + i * 10;
+      ctx.fillRect(0, y, this.W, 1.5);
+    }
+    for (let i = 0; i < 7; i++) {
+      const y = this.H - 8 - i * 10;
+      ctx.fillRect(0, y, this.W, 1.5);
+    }
+    for (let i = 0; i < 5; i++) {
+      const x = 8 + i * 10;
+      ctx.fillRect(x, 0, 1.5, this.H);
+    }
+    for (let i = 0; i < 5; i++) {
+      const x = this.W - 8 - i * 10;
+      ctx.fillRect(x, 0, 1.5, this.H);
+    }
 
-    // Border
-    ctx.strokeStyle = '#a0763c';
-    ctx.lineWidth = 1.5;
-    this.roundRect(ctx, p - 10, p - 10, w + 20, h + 20, 18); ctx.stroke();
+    ctx.fillStyle = '#f4dcae';
+    ctx.fillRect(p - 6, p - 6, w + 12, h + 12);
+    ctx.fillStyle = '#f8e7c4';
+    ctx.fillRect(p, p, w, h);
 
-    // Centre circle
-    ctx.beginPath(); ctx.arc(this.W / 2, this.H / 2, 74, 0, Math.PI * 2);
-    ctx.strokeStyle = '#e6d5b0'; ctx.lineWidth = 1.6; ctx.stroke();
-    ctx.beginPath(); ctx.arc(this.W / 2, this.H / 2, 8, 0, Math.PI * 2);
-    ctx.fillStyle = '#a0763c'; ctx.fill();
-    ctx.beginPath(); ctx.arc(this.W / 2, this.H / 2, 3, 0, Math.PI * 2);
-    ctx.fillStyle = '#fffdf6'; ctx.fill();
+    ctx.strokeStyle = '#6b4423';
+    ctx.lineWidth = 2.5;
+    ctx.strokeRect(p + 1.25, p + 1.25, w - 2.5, h - 2.5);
 
-    // Corner arcs
-    const corners = [
-      { x: p, y: p, s: 0, e: Math.PI / 2 },
-      { x: this.W - p, y: p, s: Math.PI / 2, e: Math.PI },
-      { x: this.W - p, y: this.H - p, s: Math.PI, e: Math.PI * 1.5 },
-      { x: p, y: this.H - p, s: Math.PI * 1.5, e: Math.PI * 2 }
+    const innerOff = 42;
+    ctx.strokeStyle = '#8a5a20';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(p + innerOff, p + innerOff, w - innerOff * 2, h - innerOff * 2);
+    ctx.strokeStyle = '#c19a52';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(p + innerOff + 6, p + innerOff + 6, w - innerOff * 2 - 12, h - innerOff * 2 - 12);
+
+    const ins = innerOff;
+    const cornerR = 40;
+    const drawArc = (cx, cy, s, e) => {
+      ctx.beginPath();
+      ctx.arc(cx, cy, cornerR, s, e);
+      ctx.strokeStyle = '#8a5a20';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    };
+    drawArc(p + ins, p + ins, 0, Math.PI / 2);
+    drawArc(this.W - p - ins, p + ins, Math.PI / 2, Math.PI);
+    drawArc(this.W - p - ins, this.H - p - ins, Math.PI, Math.PI * 1.5);
+    drawArc(p + ins, this.H - p - ins, Math.PI * 1.5, Math.PI * 2);
+
+    ctx.beginPath();
+    ctx.arc(this.W / 2, this.H / 2, 74, 0, Math.PI * 2);
+    ctx.strokeStyle = '#8a5a20';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(this.W / 2, this.H / 2, 68, 0, Math.PI * 2);
+    ctx.strokeStyle = '#c19a52';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      const r1 = 10, r2 = 18;
+      ctx.beginPath();
+      ctx.moveTo(this.W / 2 + Math.cos(a) * r1, this.H / 2 + Math.sin(a) * r1);
+      ctx.lineTo(this.W / 2 + Math.cos(a) * r2, this.H / 2 + Math.sin(a) * r2);
+      ctx.strokeStyle = '#8a5a20';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.arc(this.W / 2, this.H / 2, 8, 0, Math.PI * 2);
+    ctx.fillStyle = '#8a5a20';
+    ctx.fill();
+
+    const basePositions = [
+      { x: this.W / 2, y: this.H - p - 46, color: PLAYER_COLORS[0] },
+      { x: p + 46, y: this.H / 2, color: PLAYER_COLORS[1] },
+      { x: this.W / 2, y: p + 46, color: PLAYER_COLORS[2] }
     ];
-    ctx.strokeStyle = '#ece0c4';
-    ctx.lineWidth = 1.4;
-    corners.forEach(c => { ctx.beginPath(); ctx.arc(c.x, c.y, 64, c.s, c.e); ctx.stroke(); });
+    basePositions.forEach((b, i) => {
+      if (i >= GAME.activePlayers && GAME.mode === 'local' && GAME.activePlayers === 2 && i === 2) return;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 10, 0, Math.PI * 2);
+      ctx.strokeStyle = b.color;
+      ctx.lineWidth = 1.6;
+      ctx.globalAlpha = 0.45;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    });
 
-    // Pockets — flat solid black with a thin wooden ring
     for (const pk of Physics.pockets) {
+      ctx.beginPath(); ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS + 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#6b4423'; ctx.fill();
       ctx.beginPath(); ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS, 0, Math.PI * 2);
       ctx.fillStyle = '#1a1207'; ctx.fill();
-      ctx.beginPath(); ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS - 3, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS - 4, 0, Math.PI * 2);
       ctx.fillStyle = '#000'; ctx.fill();
-      ctx.beginPath(); ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS, 0, Math.PI * 2);
-      ctx.strokeStyle = '#8a5a20'; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(pk.x - 8, pk.y - 8, 6, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+      ctx.fill();
     }
   },
 
@@ -638,9 +705,9 @@ const Renderer = {
     const ctx = this.ctx;
     ctx.save();
     ctx.strokeStyle = PLAYER_COLORS[GAME.currentTurn];
-    ctx.globalAlpha = 0.6;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([5, 7]);
+    ctx.globalAlpha = 0.55;
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([6, 8]);
     ctx.lineDashOffset = -this.time * 26;
     ctx.beginPath();
     if (base.axis === 'x') { ctx.moveTo(base.min, base.y); ctx.lineTo(base.max, base.y); }
@@ -670,20 +737,44 @@ const Renderer = {
     const ctx = this.ctx;
     for (const puck of Physics.pucks) {
       if (!puck.active) continue;
-      ctx.beginPath(); ctx.arc(puck.x, puck.y + 1.8, puck.radius, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(120, 90, 40, 0.15)'; ctx.fill();
-      ctx.beginPath(); ctx.arc(puck.x, puck.y, puck.radius, 0, Math.PI * 2);
-      ctx.fillStyle = puck.color; ctx.fill();
-      ctx.beginPath(); ctx.arc(puck.x, puck.y, puck.radius - 0.4, 0, Math.PI * 2);
-      ctx.strokeStyle = puck.type === 'black' ? '#000' : '#c19a52';
-      ctx.lineWidth = 1.2; ctx.stroke();
-      // Simple highlight (flat arc)
+      const r = puck.radius;
+
       ctx.beginPath();
-      ctx.arc(puck.x - puck.radius * 0.25, puck.y - puck.radius * 0.25, puck.radius * 0.55, 0, Math.PI * 2);
-      ctx.fillStyle = puck.type === 'white' ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.12)';
+      ctx.ellipse(puck.x, puck.y + r * 0.55, r * 0.95, r * 0.35, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(80, 55, 20, 0.18)';
       ctx.fill();
-      ctx.beginPath(); ctx.arc(puck.x, puck.y, 2.2, 0, Math.PI * 2);
-      ctx.fillStyle = puck.type === 'white' ? '#c19a52' : '#333'; ctx.fill();
+
+      ctx.beginPath(); ctx.arc(puck.x, puck.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = puck.color; ctx.fill();
+
+      ctx.beginPath(); ctx.arc(puck.x, puck.y, r - 0.4, 0, Math.PI * 2);
+      ctx.strokeStyle = puck.rim; ctx.lineWidth = 1.4; ctx.stroke();
+
+      ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.66, 0, Math.PI * 2);
+      ctx.strokeStyle = puck.type === 'white' ? '#c19a52' : '#3a3a3a';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
+      ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.42, 0, Math.PI * 2);
+      ctx.fillStyle = puck.cap;
+      ctx.fill();
+
+      ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.42, 0, Math.PI * 2);
+      ctx.strokeStyle = puck.type === 'white' ? '#a67c2f' : '#1a1a1a';
+      ctx.lineWidth = 0.9;
+      ctx.stroke();
+
+      ctx.beginPath(); ctx.arc(puck.x, puck.y, 2, 0, Math.PI * 2);
+      ctx.fillStyle = puck.type === 'white' ? '#8a5a20' : '#cfcfcf';
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(puck.x, puck.y, r * 0.85, Math.PI * 1.15, Math.PI * 1.55);
+      ctx.strokeStyle = puck.type === 'white'
+        ? 'rgba(255,255,255,0.85)'
+        : 'rgba(255,255,255,0.22)';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
     }
   },
 
@@ -691,30 +782,58 @@ const Renderer = {
     const s = Physics.striker;
     if (!s || !s.active) return;
     const ctx = this.ctx;
+    const r = s.radius;
     const isMoving = Math.hypot(s.vx, s.vy) > 0.3;
     const isLocal = GAME.mode === 'local' || GAME.isPractice;
     const isMyTurn = isLocal || GAME.currentTurn === GAME.myPlayerIndex;
+
     if (!isMoving && isMyTurn && GAME.mode !== 'menu') {
       const pulse = 0.5 + Math.sin(this.time * 4) * 0.5;
       ctx.beginPath();
-      ctx.arc(s.x, s.y, s.radius + 6 + pulse * 2, 0, Math.PI * 2);
+      ctx.arc(s.x, s.y, r + 6 + pulse * 2, 0, Math.PI * 2);
       ctx.strokeStyle = s.color;
       ctx.globalAlpha = 0.35 + pulse * 0.25;
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
-    ctx.beginPath(); ctx.arc(s.x, s.y + 2.2, s.radius, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(120, 90, 40, 0.22)'; ctx.fill();
-    ctx.beginPath(); ctx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
-    ctx.fillStyle = s.color; ctx.fill();
-    ctx.beginPath(); ctx.arc(s.x, s.y, s.radius - 0.5, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = 1.4; ctx.stroke();
+
     ctx.beginPath();
-    ctx.arc(s.x - s.radius * 0.25, s.y - s.radius * 0.25, s.radius * 0.6, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fill();
-    ctx.beginPath(); ctx.arc(s.x, s.y, 2.8, 0, Math.PI * 2);
-    ctx.fillStyle = '#ffffff'; ctx.fill();
+    ctx.ellipse(s.x, s.y + r * 0.55, r * 0.95, r * 0.35, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(80, 55, 20, 0.25)';
+    ctx.fill();
+
+    ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = s.color; ctx.fill();
+
+    ctx.beginPath(); ctx.arc(s.x, s.y, r - 0.6, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.72, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+
+    ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+
+    ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.5, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.22, 0, Math.PI * 2);
+    ctx.fillStyle = s.color;
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, r * 0.85, Math.PI * 1.15, Math.PI * 1.55);
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
   },
 
   drawPocketPops() {
@@ -750,7 +869,6 @@ const Renderer = {
     const endX = s.x + Math.cos(angle) * lineLen;
     const endY = s.y + Math.sin(angle) * lineLen;
 
-    // White halo
     ctx.save();
     ctx.setLineDash([8, 10]);
     ctx.lineDashOffset = -this.time * 38;
@@ -758,10 +876,9 @@ const Renderer = {
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 6; ctx.lineCap = 'round';
     ctx.stroke();
-    // Solid aim line
     ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(endX, endY);
     ctx.strokeStyle = '#d99a10';
-    ctx.globalAlpha = 0.85;
+    ctx.globalAlpha = 0.9;
     ctx.lineWidth = 3.2;
     ctx.stroke();
     ctx.globalAlpha = 1;
@@ -782,24 +899,10 @@ const Renderer = {
     ctx.beginPath(); ctx.arc(s.x, s.y, s.radius + 6 + power * 7, 0, Math.PI * 2);
     ctx.strokeStyle = '#d99a10'; ctx.globalAlpha = 0.6; ctx.lineWidth = 2; ctx.stroke();
     ctx.globalAlpha = 1;
-  },
-
-  roundRect(ctx, x, y, w, h, r) {
-    if (w < 2 * r) r = w / 2; if (h < 2 * r) r = h / 2;
-    ctx.beginPath();
-    ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y);
-    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-    ctx.lineTo(x + w, y + h - r);
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-    ctx.lineTo(x + r, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
-    ctx.closePath();
   }
 };
 
-/* ───────── INPUT (aim from anywhere) ───────── */
+/* ───────── INPUT ───────── */
 const Input = {
   isAiming: false, aimStart: null, aimCurrent: null, canvas: null,
   _pointerId: null, _lastMoveBroadcast: 0,
@@ -909,7 +1012,7 @@ const Input = {
 const Game = {
   isResolving: false, resolveStartTime: 0, loopId: null, lastTime: 0,
   turnHadFoul: false, turnPocketed: 0, ended: false,
-  _lastNetTick: 0, _lastRollSound: 0,
+  _lastNetTick: 0, _lastRollSound: 0, _stopTime: 0,
 
   start() {
     Renderer.init();
@@ -921,6 +1024,7 @@ const Game = {
     this.turnHadFoul = false;
     this.turnPocketed = 0;
     this.ended = false;
+    this._stopTime = 0;
     this.updateAdjustSlider();
     this.updateWaitBar();
     this.lastTime = performance.now();
@@ -933,69 +1037,64 @@ const Game = {
     this.lastTime = t;
     Renderer.time += dt;
 
-    const isAuthority = true; // local & host always simulate
-
-    if (isAuthority) {
-      Physics.step(
-        (intensity, x, y) => {
-          const pan = (x / Physics.W) * 2 - 1;
-          const strikerInvolved = Physics.striker && Physics.striker.active &&
-            Math.hypot(Physics.striker.x - x, Physics.striker.y - y) < 60;
-          if (strikerInvolved) AudioManager.play('striker_hit', { pan, volume: Math.min(0.55 + intensity * 0.55, 1) });
-          else if (intensity > 0.7) AudioManager.play('puck_hit_hard', { pan, volume: Math.min(intensity, 1) });
-          else if (intensity > 0.35) AudioManager.play('puck_hit_med', { pan, volume: Math.min(intensity + 0.15, 0.9) });
-          else AudioManager.play('puck_hit_soft', { pan, volume: Math.min(intensity + 0.3, 0.8) });
-        },
-        (body, pocket, isStriker) => {
-          const pan = (body.x / Physics.W) * 2 - 1;
-          Renderer.addPocketPop(pocket.x, pocket.y, body.color);
-          if (isStriker) {
-            // STRIKER FOUL: −20
-            AudioManager.play('striker_pocket', { pan });
-            this.turnHadFoul = true;
-            const idx = GAME.currentTurn;
-            GAME.players[idx].score = Math.max(0, GAME.players[idx].score + STRIKER_FOUL);
-            FloatingText.spawn(pocket.x, pocket.y - 20, `${STRIKER_FOUL}`, '#dc2626');
-            Toast.show(`Foul! Striker pocketed · ${STRIKER_FOUL} pts`, 'error', '⚠');
-            this.updateScores();
-            if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
-              Network.broadcast({ type: 'score_update', playerIndex: idx, score: GAME.players[idx].score });
-            }
-          } else {
-            AudioManager.play('puck_pocket', { pan });
-            const pts = body.points || 0;
-            GAME.players[GAME.currentTurn].score += pts;
-            this.turnPocketed++;
-            this.updateScores();
-            FloatingText.spawn(pocket.x, pocket.y - 20, `+${pts}`, PLAYER_COLORS[GAME.currentTurn]);
-            if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
-              Network.broadcast({ type: 'score_update', playerIndex: GAME.currentTurn, score: GAME.players[GAME.currentTurn].score });
-            }
+    Physics.step(
+      (intensity, x, y) => {
+        const pan = (x / Physics.W) * 2 - 1;
+        const strikerInvolved = Physics.striker && Physics.striker.active &&
+          Math.hypot(Physics.striker.x - x, Physics.striker.y - y) < 60;
+        if (strikerInvolved) AudioManager.play('striker_hit', { pan, volume: Math.min(0.55 + intensity * 0.55, 1) });
+        else if (intensity > 0.7) AudioManager.play('puck_hit_hard', { pan, volume: Math.min(intensity, 1) });
+        else if (intensity > 0.35) AudioManager.play('puck_hit_med', { pan, volume: Math.min(intensity + 0.15, 0.9) });
+        else AudioManager.play('puck_hit_soft', { pan, volume: Math.min(intensity + 0.3, 0.8) });
+      },
+      (body, pocket, isStriker) => {
+        const pan = (body.x / Physics.W) * 2 - 1;
+        Renderer.addPocketPop(pocket.x, pocket.y, body.color);
+        if (isStriker) {
+          AudioManager.play('striker_pocket', { pan });
+          this.turnHadFoul = true;
+          const idx = GAME.currentTurn;
+          GAME.players[idx].score = Math.max(0, GAME.players[idx].score + STRIKER_FOUL);
+          FloatingText.spawn(pocket.x, pocket.y - 20, `${STRIKER_FOUL}`, '#dc2626');
+          Toast.show(`Foul! Striker pocketed · ${STRIKER_FOUL} pts`, 'error', '⚠');
+          this.updateScores();
+          if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
+            Network.broadcast({ type: 'score_update', playerIndex: idx, score: GAME.players[idx].score });
           }
-        },
-        (body, wallSpeed) => {
-          const pan = (body.x / Physics.W) * 2 - 1;
-          const v = Math.min(wallSpeed / 14, 1);
-          if (v < 0.15) return;
-          if (v > 0.5) AudioManager.play('wall_thud', { pan, volume: v });
-          else AudioManager.play('wall_tick', { pan, volume: 0.4 + v * 0.4 });
-        },
-        (striker) => {
-          const now = performance.now();
-          if (now - this._lastRollSound > 80) {
-            this._lastRollSound = now;
-            const pan = (striker.x / Physics.W) * 2 - 1;
-            const spd = Math.hypot(striker.vx, striker.vy);
-            AudioManager.play('striker_roll', { pan, volume: Math.min(0.12 + spd / 34, 0.4) });
+        } else {
+          AudioManager.play('puck_pocket', { pan });
+          const pts = body.points || 0;
+          GAME.players[GAME.currentTurn].score += pts;
+          this.turnPocketed++;
+          this.updateScores();
+          FloatingText.spawn(pocket.x, pocket.y - 20, `+${pts}`, PLAYER_COLORS[GAME.currentTurn]);
+          if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
+            Network.broadcast({ type: 'score_update', playerIndex: GAME.currentTurn, score: GAME.players[GAME.currentTurn].score });
           }
         }
-      );
-    }
+      },
+      (body, wallSpeed) => {
+        const pan = (body.x / Physics.W) * 2 - 1;
+        const v = Math.min(wallSpeed / 14, 1);
+        if (v < 0.15) return;
+        if (v > 0.5) AudioManager.play('wall_thud', { pan, volume: v });
+        else AudioManager.play('wall_tick', { pan, volume: 0.4 + v * 0.4 });
+      },
+      (striker) => {
+        const now = performance.now();
+        if (now - this._lastRollSound > 80) {
+          this._lastRollSound = now;
+          const pan = (striker.x / Physics.W) * 2 - 1;
+          const spd = Math.hypot(striker.vx, striker.vy);
+          AudioManager.play('striker_roll', { pan, volume: Math.min(0.12 + spd / 34, 0.4) });
+        }
+      }
+    );
 
-    if (this.isResolving) {
-      const elapsed = t - this.resolveStartTime;
-      const stopped = Physics.allStopped();
-      if (stopped || elapsed > 12000) {
+    if (this.isResolving && Physics.allStopped()) {
+      if (!this._stopTime) this._stopTime = performance.now();
+      if (performance.now() - this._stopTime > 220) {
+        this._stopTime = 0;
         this.isResolving = false;
         if (GAME.mode === 'playing' && GAME.isHost) {
           Network.broadcast({
@@ -1007,6 +1106,8 @@ const Game = {
         }
         this.endTurn();
       }
+    } else {
+      this._stopTime = 0;
     }
 
     if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
@@ -1020,7 +1121,6 @@ const Game = {
       }
     }
 
-    // Win by 100
     if (!this.ended) {
       const winner = this.checkWinner();
       if (winner !== -1) {
@@ -1049,23 +1149,17 @@ const Game = {
     const foul = this.turnHadFoul;
     const scored = this.turnPocketed > 0;
 
-    if (foul) {
-      AudioManager.play('turn_pass');
-    } else if (scored) {
+    if (foul) AudioManager.play('turn_pass');
+    else if (scored) {
       Toast.show('Nice! Play again', 'success', '✦');
       AudioManager.play('second_chance');
-    } else {
-      AudioManager.play('turn');
-    }
+    } else AudioManager.play('turn');
 
     const keepTurn = !foul && scored;
-
     this.turnHadFoul = false;
     this.turnPocketed = 0;
 
-    if (!keepTurn) {
-      GAME.currentTurn = (GAME.currentTurn + 1) % GAME.activePlayers;
-    }
+    if (!keepTurn) GAME.currentTurn = (GAME.currentTurn + 1) % GAME.activePlayers;
     Physics.striker = Physics.createStriker(GAME.currentTurn, 0.5);
 
     if (GAME.mode === 'playing' && !GAME.isPractice && GAME.isHost) {
@@ -1177,7 +1271,6 @@ const Game = {
         const rect = track.getBoundingClientRect();
         const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
         const rawPct = x / rect.width;
-        // Snap to a free slot (skips positions overlapping pucks)
         const free = Physics.findFreeBaselinePos(GAME.currentTurn, rawPct);
         const s = Physics.striker; if (!s || !s.active) return;
         s.x = free.x;
