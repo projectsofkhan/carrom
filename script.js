@@ -1,10 +1,13 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P • v10
-   • Full square board, wooden frame, pockets inside play field
-   • Puck & striker designs (rings, caps, bevels)
-   • Snappy turn handoff (~220ms after motion stops)
-   • Keeps: striker foul −20, first to 100, 2P/3P local,
-            quick-chat dropdown, aim-from-anywhere, slider skips pucks
+   CARROM 3P • v11
+   • White pucks use true white with light tones
+   • Pockets are at play-corner; walls open a gap so pieces
+     can actually drop in
+   • Corner arcs drawn inside the play rectangle
+   • 2P mode: second player uses P3's baseline slot & chip
+   • Faster turn handoff (energy-based stop + snap)
+   • Keeps: striker foul −20, first to 100, quick chat,
+            aim-from-anywhere, slider skips pucks
 ═══════════════════════════════════════════════════════════ */
 
 const WIN_SCORE = 100;
@@ -169,13 +172,13 @@ const Network = {
   onData: null, onError: null, onPeerJoin: null, onPeerLeave: null,
 
   generateCode() { return String(Math.floor(1000 + Math.random() * 9000)); },
-  generateClientId() { return 'c10-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
+  generateClientId() { return 'c11-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
 
   initHost(cb) {
     this.isHost = true;
     this.roomCode = this.generateCode();
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const peerId = 'c10-' + this.roomCode;
+    const peerId = 'c11-' + this.roomCode;
     return new Promise((resolve, reject) => {
       let settled = false, attempts = 0;
       const maxAttempts = 6;
@@ -222,7 +225,7 @@ const Network = {
     this.isHost = false;
     this.roomCode = roomCode;
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const hostPeerId = 'c10-' + roomCode;
+    const hostPeerId = 'c11-' + roomCode;
     const clientId = this.generateClientId();
     return new Promise((resolve, reject) => {
       let settled = false, retries = 0;
@@ -317,26 +320,29 @@ const Network = {
 const Physics = {
   W: 700, H: 700,
   BOARD_PADDING: 62,
-  PLAY_INSET: 14,
   PUCK_RADIUS: 17,
   STRIKER_RADIUS: 24,
   POCKET_RADIUS: 46,
-  POCKET_INSET: 46,
   FRICTION: 0.990,
   WALL_BOUNCE: 0.8,
-  MIN_SPEED: 0.08,
+  MIN_SPEED: 0.05,
+  ALMOST_STOP_SPEED: 0.35,
   MAX_POWER: 26,
   RESTITUTION: 0.94,
 
   pockets: [], pucks: [], striker: null,
 
   init() {
-    const inset = this.POCKET_INSET;
+    /* Pockets sit exactly at the inner corners of the play rect.
+       bounds = { left: 62, top: 62, right: 638, bottom: 638 }
+       so pockets are at (62,62), (638,62), (62,638), (638,638)
+       — that way the wall "opens" and the puck can fall in. */
+    const b = this.bounds();
     this.pockets = [
-      { x: inset, y: inset },
-      { x: this.W - inset, y: inset },
-      { x: inset, y: this.H - inset },
-      { x: this.W - inset, y: this.H - inset }
+      { x: b.left,  y: b.top },
+      { x: b.right, y: b.top },
+      { x: b.left,  y: b.bottom },
+      { x: b.right, y: b.bottom }
     ];
   },
 
@@ -345,47 +351,79 @@ const Physics = {
     return { left: p, right: this.W - p, top: p, bottom: this.H - p };
   },
 
+  /* Corner-inward play rect used for the inner decorative arcs */
+  innerRect() {
+    const b = this.bounds();
+    const off = 40;
+    return { left: b.left + off, right: b.right - off, top: b.top + off, bottom: b.bottom - off };
+  },
+
   getBaseline(i) {
-    const p = this.BOARD_PADDING;
+    const b = this.bounds();
     const inset = 46;
     switch (i) {
-      case 0: return { axis: 'x', x: this.W / 2, y: this.H - p - inset, min: p + 76, max: this.W - p - 76 };
-      case 1: return { axis: 'y', x: p + inset, y: this.H / 2, min: p + 76, max: this.H - p - 76 };
-      case 2: return { axis: 'x', x: this.W / 2, y: p + inset, min: p + 76, max: this.W - p - 76 };
-      default: return { axis: 'x', x: this.W / 2, y: this.H - p - inset, min: p + 76, max: this.W - p - 76 };
+      /* slot 0: bottom,  slot 1: left,  slot 2: top */
+      case 0: return { axis: 'x', x: this.W / 2, y: b.bottom - inset, min: b.left + 76, max: b.right - 76 };
+      case 1: return { axis: 'y', x: b.left + inset, y: this.H / 2, min: b.top + 76, max: b.bottom - 76 };
+      case 2: return { axis: 'x', x: this.W / 2, y: b.top + inset, min: b.left + 76, max: b.right - 76 };
+      default: return { axis: 'x', x: this.W / 2, y: b.bottom - inset, min: b.left + 76, max: b.right - 76 };
     }
+  },
+
+  /* In 2P local: player 1 (index 1) uses slot 2 (top), which is
+     visually where P3 was — that's what the user asked for. */
+  slotForPlayer(playerIndex) {
+    if (GAME.mode === 'local' && GAME.localMode === 'local2p') {
+      return playerIndex === 0 ? 0 : 2;
+    }
+    return playerIndex;
   },
 
   createPucks() {
     const pucks = [];
     const cx = this.W / 2, cy = this.H / 2;
+    /* outer ring — WHITE (true white with soft tones) */
     for (let i = 0; i < 9; i++) {
       const a = (i / 9) * Math.PI * 2 - Math.PI / 2;
       const r = 58 + ((i % 3) - 1) * 0.6;
-      pucks.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, vx: 0, vy: 0,
-        radius: this.PUCK_RADIUS, color: '#f3e3bd', rim: '#c19a52', cap: '#e6c78a',
-        type: 'white', points: POINTS.white, active: true, trail: [], spin: 0 });
+      pucks.push({
+        x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r,
+        vx: 0, vy: 0, radius: this.PUCK_RADIUS,
+        color: '#ffffff', rim: '#c9c9c9', cap: '#f3f3f3', innerDot: '#bdbdbd',
+        type: 'white', points: POINTS.white, active: true, trail: []
+      });
     }
+    /* inner ring — BLACK */
     for (let i = 0; i < 9; i++) {
       const a = (i / 9) * Math.PI * 2 + 0.35;
       const r = 30 + ((i % 3) - 1) * 0.5;
-      pucks.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, vx: 0, vy: 0,
-        radius: this.PUCK_RADIUS, color: '#1a1a1a', rim: '#000', cap: '#4a4a4a',
-        type: 'black', points: POINTS.black, active: true, trail: [], spin: 0 });
+      pucks.push({
+        x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r,
+        vx: 0, vy: 0, radius: this.PUCK_RADIUS,
+        color: '#1a1a1a', rim: '#000', cap: '#3a3a3a', innerDot: '#cfcfcf',
+        type: 'black', points: POINTS.black, active: true, trail: []
+      });
     }
-    pucks.push({ x: cx, y: cy, vx: 0, vy: 0, radius: this.PUCK_RADIUS,
-      color: '#f3e3bd', rim: '#c19a52', cap: '#e6c78a',
-      type: 'white', points: POINTS.white, active: true, trail: [], spin: 0 });
+    /* Queen (centre) — white */
+    pucks.push({
+      x: cx, y: cy, vx: 0, vy: 0, radius: this.PUCK_RADIUS,
+      color: '#ffffff', rim: '#c9c9c9', cap: '#f3f3f3', innerDot: '#bdbdbd',
+      type: 'white', points: POINTS.white, active: true, trail: []
+    });
     return pucks;
   },
 
-  createStriker(i, sideOffset = 0.5) {
-    const base = this.getBaseline(i);
+  createStriker(playerIndex, sideOffset = 0.5) {
+    const slot = this.slotForPlayer(playerIndex);
+    const base = this.getBaseline(slot);
     let x, y;
     if (base.axis === 'x') { x = base.min + (base.max - base.min) * sideOffset; y = base.y; }
     else { x = base.x; y = base.min + (base.max - base.min) * sideOffset; }
-    const s = { x, y, vx: 0, vy: 0, radius: this.STRIKER_RADIUS, color: PLAYER_COLORS[i],
-      type: 'striker', active: true, trail: [] };
+    const s = {
+      x, y, vx: 0, vy: 0, radius: this.STRIKER_RADIUS,
+      color: PLAYER_COLORS[playerIndex],
+      type: 'striker', active: true, trail: []
+    };
     this.separateFromPucks(s);
     return s;
   },
@@ -420,7 +458,8 @@ const Physics = {
   },
 
   findFreeBaselinePos(playerIndex, targetPct) {
-    const base = this.getBaseline(playerIndex);
+    const slot = this.slotForPlayer(playerIndex);
+    const base = this.getBaseline(slot);
     const min = base.min, max = base.max;
     const span = max - min;
     const tryPct = (p) => {
@@ -500,6 +539,16 @@ const Physics = {
     }
   },
 
+  /* Returns true if body is close enough to a pocket to skip the wall clamp */
+  nearPocket(body) {
+    for (const p of this.pockets) {
+      const dx = body.x - p.x, dy = body.y - p.y;
+      const d = Math.hypot(dx, dy);
+      if (d < this.POCKET_RADIUS + body.radius * 0.5) return true;
+    }
+    return false;
+  },
+
   stepBody(body, bounds, onWall) {
     body.x += body.vx; body.y += body.vy;
     body.vx *= this.FRICTION; body.vy *= this.FRICTION;
@@ -508,19 +557,35 @@ const Physics = {
     if (speed > 2.5) { body.trail.push({ x: body.x, y: body.y }); if (body.trail.length > 8) body.trail.shift(); }
     else if (body.trail.length > 0) body.trail.shift();
 
+    /* wall collision — skip clamping near pockets so the piece can fall in */
+    const skipWall = this.nearPocket(body);
     let hitWall = false, wallSpeed = 0;
-    if (body.x - body.radius < bounds.left) { body.x = bounds.left + body.radius; wallSpeed = Math.abs(body.vx); body.vx *= -this.WALL_BOUNCE; hitWall = true; }
-    else if (body.x + body.radius > bounds.right) { body.x = bounds.right - body.radius; wallSpeed = Math.abs(body.vx); body.vx *= -this.WALL_BOUNCE; hitWall = true; }
-    if (body.y - body.radius < bounds.top) { body.y = bounds.top + body.radius; wallSpeed = Math.max(wallSpeed, Math.abs(body.vy)); body.vy *= -this.WALL_BOUNCE; hitWall = true; }
-    else if (body.y + body.radius > bounds.bottom) { body.y = bounds.bottom - body.radius; wallSpeed = Math.max(wallSpeed, Math.abs(body.vy)); body.vy *= -this.WALL_BOUNCE; hitWall = true; }
+
+    if (!skipWall) {
+      if (body.x - body.radius < bounds.left) { body.x = bounds.left + body.radius; wallSpeed = Math.abs(body.vx); body.vx *= -this.WALL_BOUNCE; hitWall = true; }
+      else if (body.x + body.radius > bounds.right) { body.x = bounds.right - body.radius; wallSpeed = Math.abs(body.vx); body.vx *= -this.WALL_BOUNCE; hitWall = true; }
+      if (body.y - body.radius < bounds.top) { body.y = bounds.top + body.radius; wallSpeed = Math.max(wallSpeed, Math.abs(body.vy)); body.vy *= -this.WALL_BOUNCE; hitWall = true; }
+      else if (body.y + body.radius > bounds.bottom) { body.y = bounds.bottom - body.radius; wallSpeed = Math.max(wallSpeed, Math.abs(body.vy)); body.vy *= -this.WALL_BOUNCE; hitWall = true; }
+    } else {
+      /* Still block the piece from leaving the board entirely (safety net) */
+      const out = 6;
+      if (body.x < bounds.left - out)   { body.x = bounds.left - out; body.vx = 0; }
+      if (body.x > bounds.right + out)  { body.x = bounds.right + out; body.vx = 0; }
+      if (body.y < bounds.top - out)    { body.y = bounds.top - out; body.vy = 0; }
+      if (body.y > bounds.bottom + out) { body.y = bounds.bottom + out; body.vy = 0; }
+    }
     if (hitWall && onWall) onWall(body, wallSpeed);
   },
 
   checkPockets(body, onPocket, isStriker) {
+    /* A piece pockets when its EDGE crosses the pocket rim.
+       Distance from piece centre to pocket centre < POCKET_RADIUS - 2
+       (a small margin so the visual is convincing without being unfair) */
     for (const p of this.pockets) {
       const dx = body.x - p.x, dy = body.y - p.y;
-      const threshold = this.POCKET_RADIUS - body.radius * 0.5;
-      if (dx * dx + dy * dy < threshold * threshold) {
+      const d2 = dx * dx + dy * dy;
+      const hit = this.POCKET_RADIUS - 2;
+      if (d2 < hit * hit) {
         body.active = false; body.vx = 0; body.vy = 0;
         if (onPocket) onPocket(body, p, isStriker);
         return true;
@@ -530,9 +595,23 @@ const Physics = {
   },
 
   allStopped() {
-    if (this.striker && this.striker.active && Math.hypot(this.striker.vx, this.striker.vy) > 0.02) return false;
-    for (const p of this.pucks) if (p.active && Math.hypot(p.vx, p.vy) > 0.02) return false;
+    const th = 0.02;
+    if (this.striker && this.striker.active && Math.hypot(this.striker.vx, this.striker.vy) > th) return false;
+    for (const p of this.pucks) if (p.active && Math.hypot(p.vx, p.vy) > th) return false;
     return true;
+  },
+
+  /* Almost dead? Snap to zero so we don't wait for the last few microns */
+  almostStopped() {
+    const th = this.ALMOST_STOP_SPEED;
+    if (this.striker && this.striker.active && Math.hypot(this.striker.vx, this.striker.vy) > th) return false;
+    for (const p of this.pucks) if (p.active && Math.hypot(p.vx, p.vy) > th) return false;
+    return true;
+  },
+
+  snapAll() {
+    if (this.striker && this.striker.active) { this.striker.vx = 0; this.striker.vy = 0; }
+    for (const p of this.pucks) if (p.active) { p.vx = 0; p.vy = 0; }
   },
 
   activePucksCount() { return this.pucks.filter(p => p.active).length; },
@@ -583,11 +662,14 @@ const Renderer = {
 
   drawBoard() {
     const ctx = this.ctx, p = Physics.BOARD_PADDING;
-    const w = this.W - p * 2, h = this.H - p * 2;
+    const b = Physics.bounds();
+    const w = b.right - b.left, h = b.bottom - b.top;
 
+    /* Wooden frame (full square) */
     ctx.fillStyle = '#8b5a2b';
     ctx.fillRect(0, 0, this.W, this.H);
 
+    /* Fine grain lines */
     ctx.fillStyle = 'rgba(0,0,0,0.08)';
     for (let i = 0; i < 7; i++) {
       const y = 8 + i * 10;
@@ -606,37 +688,42 @@ const Renderer = {
       ctx.fillRect(x, 0, 1.5, this.H);
     }
 
+    /* Play surface */
     ctx.fillStyle = '#f4dcae';
     ctx.fillRect(p - 6, p - 6, w + 12, h + 12);
     ctx.fillStyle = '#f8e7c4';
-    ctx.fillRect(p, p, w, h);
+    ctx.fillRect(b.left, b.top, w, h);
 
+    /* Play-surface border */
     ctx.strokeStyle = '#6b4423';
     ctx.lineWidth = 2.5;
-    ctx.strokeRect(p + 1.25, p + 1.25, w - 2.5, h - 2.5);
+    ctx.strokeRect(b.left + 1.25, b.top + 1.25, w - 2.5, h - 2.5);
 
-    const innerOff = 42;
+    /* Inner decorative rect — pulled INSIDE the play area */
+    const ins = Physics.innerRect();
+    const iw = ins.right - ins.left, ih = ins.bottom - ins.top;
     ctx.strokeStyle = '#8a5a20';
     ctx.lineWidth = 2;
-    ctx.strokeRect(p + innerOff, p + innerOff, w - innerOff * 2, h - innerOff * 2);
+    ctx.strokeRect(ins.left, ins.top, iw, ih);
     ctx.strokeStyle = '#c19a52';
     ctx.lineWidth = 1;
-    ctx.strokeRect(p + innerOff + 6, p + innerOff + 6, w - innerOff * 2 - 12, h - innerOff * 2 - 12);
+    ctx.strokeRect(ins.left + 6, ins.top + 6, iw - 12, ih - 12);
 
-    const ins = innerOff;
+    /* Corner arcs, drawn inside the inner rect */
     const cornerR = 40;
-    const drawArc = (cx, cy, s, e) => {
+    const drawArcIn = (cx, cy, s, e) => {
       ctx.beginPath();
       ctx.arc(cx, cy, cornerR, s, e);
       ctx.strokeStyle = '#8a5a20';
       ctx.lineWidth = 1.6;
       ctx.stroke();
     };
-    drawArc(p + ins, p + ins, 0, Math.PI / 2);
-    drawArc(this.W - p - ins, p + ins, Math.PI / 2, Math.PI);
-    drawArc(this.W - p - ins, this.H - p - ins, Math.PI, Math.PI * 1.5);
-    drawArc(p + ins, this.H - p - ins, Math.PI * 1.5, Math.PI * 2);
+    drawArcIn(ins.left,       ins.top,        0,             Math.PI / 2);
+    drawArcIn(ins.right,      ins.top,        Math.PI / 2,   Math.PI);
+    drawArcIn(ins.right,      ins.bottom,     Math.PI,       Math.PI * 1.5);
+    drawArcIn(ins.left,       ins.bottom,     Math.PI * 1.5, Math.PI * 2);
 
+    /* Centre circle + sun */
     ctx.beginPath();
     ctx.arc(this.W / 2, this.H / 2, 74, 0, Math.PI * 2);
     ctx.strokeStyle = '#8a5a20';
@@ -650,10 +737,9 @@ const Renderer = {
 
     for (let i = 0; i < 24; i++) {
       const a = (i / 24) * Math.PI * 2;
-      const r1 = 10, r2 = 18;
       ctx.beginPath();
-      ctx.moveTo(this.W / 2 + Math.cos(a) * r1, this.H / 2 + Math.sin(a) * r1);
-      ctx.lineTo(this.W / 2 + Math.cos(a) * r2, this.H / 2 + Math.sin(a) * r2);
+      ctx.moveTo(this.W / 2 + Math.cos(a) * 10, this.H / 2 + Math.sin(a) * 10);
+      ctx.lineTo(this.W / 2 + Math.cos(a) * 18, this.H / 2 + Math.sin(a) * 18);
       ctx.strokeStyle = '#8a5a20';
       ctx.lineWidth = 1;
       ctx.stroke();
@@ -663,28 +749,38 @@ const Renderer = {
     ctx.fillStyle = '#8a5a20';
     ctx.fill();
 
-    const basePositions = [
-      { x: this.W / 2, y: this.H - p - 46, color: PLAYER_COLORS[0] },
-      { x: p + 46, y: this.H / 2, color: PLAYER_COLORS[1] },
-      { x: this.W / 2, y: p + 46, color: PLAYER_COLORS[2] }
-    ];
-    basePositions.forEach((b, i) => {
-      if (i >= GAME.activePlayers && GAME.mode === 'local' && GAME.activePlayers === 2 && i === 2) return;
+    /* Baseline sight rings for each active player, drawn inside the
+       inner rect corners so nothing pokes outside the box */
+    const slotCount = GAME.mode === 'local' && GAME.localMode === 'local2p' ? 2 : GAME.activePlayers;
+    const slots = [];
+    for (let pi = 0; pi < slotCount; pi++) {
+      const slot = Physics.slotForPlayer(pi);
+      const base = Physics.getBaseline(slot);
+      const mid = (base.min + base.max) / 2;
+      const x = base.axis === 'x' ? mid : base.x;
+      const y = base.axis === 'x' ? base.y : mid;
+      slots.push({ x, y, color: PLAYER_COLORS[pi] });
+    }
+    slots.forEach(bp => {
       ctx.beginPath();
-      ctx.arc(b.x, b.y, 10, 0, Math.PI * 2);
-      ctx.strokeStyle = b.color;
+      ctx.arc(bp.x, bp.y, 10, 0, Math.PI * 2);
+      ctx.strokeStyle = bp.color;
       ctx.lineWidth = 1.6;
       ctx.globalAlpha = 0.45;
       ctx.stroke();
       ctx.globalAlpha = 1;
     });
 
+    /* Pockets — drawn at play corners */
     for (const pk of Physics.pockets) {
-      ctx.beginPath(); ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS + 3, 0, Math.PI * 2);
+      ctx.beginPath();
+      ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS + 3, 0, Math.PI * 2);
       ctx.fillStyle = '#6b4423'; ctx.fill();
-      ctx.beginPath(); ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS, 0, Math.PI * 2);
+      ctx.beginPath();
+      ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS, 0, Math.PI * 2);
       ctx.fillStyle = '#1a1207'; ctx.fill();
-      ctx.beginPath(); ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS - 4, 0, Math.PI * 2);
+      ctx.beginPath();
+      ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS - 4, 0, Math.PI * 2);
       ctx.fillStyle = '#000'; ctx.fill();
       ctx.beginPath();
       ctx.arc(pk.x - 8, pk.y - 8, 6, 0, Math.PI * 2);
@@ -701,7 +797,8 @@ const Renderer = {
     const s = Physics.striker;
     if (!s || !s.active) return;
     if (Math.hypot(s.vx, s.vy) > 0.3) return;
-    const base = Physics.getBaseline(GAME.currentTurn);
+    const slot = Physics.slotForPlayer(GAME.currentTurn);
+    const base = Physics.getBaseline(slot);
     const ctx = this.ctx;
     ctx.save();
     ctx.strokeStyle = PLAYER_COLORS[GAME.currentTurn];
@@ -744,34 +841,39 @@ const Renderer = {
       ctx.fillStyle = 'rgba(80, 55, 20, 0.18)';
       ctx.fill();
 
+      /* body */
       ctx.beginPath(); ctx.arc(puck.x, puck.y, r, 0, Math.PI * 2);
       ctx.fillStyle = puck.color; ctx.fill();
 
+      /* outer rim */
       ctx.beginPath(); ctx.arc(puck.x, puck.y, r - 0.4, 0, Math.PI * 2);
       ctx.strokeStyle = puck.rim; ctx.lineWidth = 1.4; ctx.stroke();
 
+      /* mid ring */
       ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.66, 0, Math.PI * 2);
-      ctx.strokeStyle = puck.type === 'white' ? '#c19a52' : '#3a3a3a';
+      ctx.strokeStyle = puck.type === 'white' ? '#c0c0c0' : '#3a3a3a';
       ctx.lineWidth = 1.2;
       ctx.stroke();
 
+      /* cap */
       ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.42, 0, Math.PI * 2);
       ctx.fillStyle = puck.cap;
       ctx.fill();
-
       ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.42, 0, Math.PI * 2);
-      ctx.strokeStyle = puck.type === 'white' ? '#a67c2f' : '#1a1a1a';
+      ctx.strokeStyle = puck.type === 'white' ? '#b8b8b8' : '#1a1a1a';
       ctx.lineWidth = 0.9;
       ctx.stroke();
 
+      /* centre dot */
       ctx.beginPath(); ctx.arc(puck.x, puck.y, 2, 0, Math.PI * 2);
-      ctx.fillStyle = puck.type === 'white' ? '#8a5a20' : '#cfcfcf';
+      ctx.fillStyle = puck.innerDot;
       ctx.fill();
 
+      /* highlight arc */
       ctx.beginPath();
       ctx.arc(puck.x, puck.y, r * 0.85, Math.PI * 1.15, Math.PI * 1.55);
       ctx.strokeStyle = puck.type === 'white'
-        ? 'rgba(255,255,255,0.85)'
+        ? 'rgba(255,255,255,0.95)'
         : 'rgba(255,255,255,0.22)';
       ctx.lineWidth = 1.6;
       ctx.stroke();
@@ -805,35 +907,27 @@ const Renderer = {
 
     ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
     ctx.fillStyle = s.color; ctx.fill();
-
     ctx.beginPath(); ctx.arc(s.x, s.y, r - 0.6, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+    ctx.lineWidth = 1.5; ctx.stroke();
 
     ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.72, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-    ctx.lineWidth = 1.4;
-    ctx.stroke();
+    ctx.lineWidth = 1.4; ctx.stroke();
 
     ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.5, 0, Math.PI * 2);
-    ctx.fillStyle = '#ffffff';
-    ctx.fill();
-
+    ctx.fillStyle = '#ffffff'; ctx.fill();
     ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.5, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(0,0,0,0.2)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    ctx.lineWidth = 1; ctx.stroke();
 
     ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.22, 0, Math.PI * 2);
-    ctx.fillStyle = s.color;
-    ctx.fill();
+    ctx.fillStyle = s.color; ctx.fill();
 
     ctx.beginPath();
     ctx.arc(s.x, s.y, r * 0.85, Math.PI * 1.15, Math.PI * 1.55);
     ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    ctx.lineWidth = 2; ctx.stroke();
   },
 
   drawPocketPops() {
@@ -935,8 +1029,8 @@ const Input = {
   },
 
   isInsideBoard(pos) {
-    const p = Physics.BOARD_PADDING - 2;
-    return pos.x > p && pos.x < Physics.W - p && pos.y > p && pos.y < Physics.H - p;
+    const b = Physics.bounds();
+    return pos.x > b.left - 2 && pos.x < b.right + 2 && pos.y > b.top - 2 && pos.y < b.bottom + 2;
   },
 
   onDown(e) {
@@ -1012,7 +1106,7 @@ const Input = {
 const Game = {
   isResolving: false, resolveStartTime: 0, loopId: null, lastTime: 0,
   turnHadFoul: false, turnPocketed: 0, ended: false,
-  _lastNetTick: 0, _lastRollSound: 0, _stopTime: 0,
+  _lastNetTick: 0, _lastRollSound: 0,
 
   start() {
     Renderer.init();
@@ -1024,7 +1118,6 @@ const Game = {
     this.turnHadFoul = false;
     this.turnPocketed = 0;
     this.ended = false;
-    this._stopTime = 0;
     this.updateAdjustSlider();
     this.updateWaitBar();
     this.lastTime = performance.now();
@@ -1091,10 +1184,14 @@ const Game = {
       }
     );
 
-    if (this.isResolving && Physics.allStopped()) {
-      if (!this._stopTime) this._stopTime = performance.now();
-      if (performance.now() - this._stopTime > 220) {
-        this._stopTime = 0;
+    if (this.isResolving) {
+      const elapsed = t - this.resolveStartTime;
+      /* If everything is almost dead, snap to stop and end the turn immediately. */
+      if (Physics.almostStopped()) {
+        Physics.snapAll();
+      }
+      const fullyStopped = Physics.allStopped();
+      if (fullyStopped || elapsed > 12000) {
         this.isResolving = false;
         if (GAME.mode === 'playing' && GAME.isHost) {
           Network.broadcast({
@@ -1106,8 +1203,6 @@ const Game = {
         }
         this.endTurn();
       }
-    } else {
-      this._stopTime = 0;
     }
 
     if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
@@ -1231,9 +1326,30 @@ const Game = {
   },
 
   updateTurnUI() {
-    document.querySelectorAll('.player-chip').forEach((c, i) => {
+    /* In 2P local mode, chip 3 is reused as P2, and chip 2 is hidden. */
+    const is2P = GAME.mode === 'local' && GAME.localMode === 'local2p';
+    const chips = document.querySelectorAll('.player-chip');
+    chips.forEach((c, i) => {
+      let visible = i < GAME.activePlayers;
+      if (is2P) visible = (i === 0 || i === 2);
+      c.classList.toggle('hidden-chip', !visible);
       c.classList.toggle('active', i === GAME.currentTurn);
-      c.classList.toggle('hidden-chip', i >= GAME.activePlayers);
+      if (is2P && i === 2) {
+        /* P2 uses purple chip with teal accent so it's still readable */
+        const dot = c.querySelector('.pc-dot');
+        const nameEl = c.querySelector('.pc-name');
+        if (dot) dot.style.background = PLAYER_COLORS[1];
+        if (nameEl) nameEl.textContent = 'P2';
+      } else {
+        const dot = c.querySelector('.pc-dot');
+        if (dot) dot.style.background = PLAYER_COLORS[i];
+        const nameEl = c.querySelector('.pc-name');
+        if (nameEl) {
+          if (i === 0) nameEl.textContent = 'YOU';
+          else if (i === 2 && !is2P) nameEl.textContent = 'P3';
+          else if (i === 1) nameEl.textContent = 'P2';
+        }
+      }
     });
     const swatch = document.getElementById('turnSwatch');
     const label = document.getElementById('turnLabel');
@@ -1255,7 +1371,8 @@ const Game = {
       row.classList.add('hidden'); return;
     }
     row.classList.remove('hidden');
-    const base = Physics.getBaseline(GAME.currentTurn);
+    const slot = Physics.slotForPlayer(GAME.currentTurn);
+    const base = Physics.getBaseline(slot);
     let pct = 0.5;
     if (base.axis === 'x') pct = (Physics.striker.x - base.min) / (base.max - base.min);
     else pct = (Physics.striker.y - base.min) / (base.max - base.min);
@@ -1273,8 +1390,7 @@ const Game = {
         const rawPct = x / rect.width;
         const free = Physics.findFreeBaselinePos(GAME.currentTurn, rawPct);
         const s = Physics.striker; if (!s || !s.active) return;
-        s.x = free.x;
-        s.y = free.y;
+        s.x = free.x; s.y = free.y;
         thumb.style.left = (free.pct * 100) + '%';
         fill.style.width = (free.pct * 100) + '%';
         if (GAME.mode === 'playing' && !GAME.isPractice) {
@@ -1307,6 +1423,7 @@ const Game = {
   },
 
   updateScores() {
+    const is2P = GAME.mode === 'local' && GAME.localMode === 'local2p';
     GAME.players.forEach((p, i) => {
       const el = document.getElementById('scoreP' + i);
       if (el) el.textContent = p.score;
@@ -1316,8 +1433,14 @@ const Game = {
     document.querySelectorAll('.player-chip').forEach(chip => {
       const idx = parseInt(chip.dataset.p);
       const nameEl = chip.querySelector('.pc-name');
-      if (nameEl) nameEl.textContent = playerLabel(idx);
-      chip.classList.toggle('hidden-chip', idx >= GAME.activePlayers);
+      if (nameEl) {
+        if (idx === 0) nameEl.textContent = 'YOU';
+        else if (idx === 1) nameEl.textContent = 'P2';
+        else if (idx === 2) nameEl.textContent = is2P ? 'P2' : 'P3';
+      }
+      let visible = idx < GAME.activePlayers;
+      if (is2P) visible = (idx === 0 || idx === 2);
+      chip.classList.toggle('hidden-chip', !visible);
     });
   }
 };
