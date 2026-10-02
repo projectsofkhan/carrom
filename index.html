@@ -4,12 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="theme-color" content="#0a0e17">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>Carrom 3P</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800;900&family=Space+Mono:wght@700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
 
@@ -196,14 +199,13 @@
     <div class="board-wrap">
       <div class="board-frame" id="boardFrame">
         <canvas id="gameCanvas" width="700" height="700"></canvas>
-        <div class="wait-overlay hidden" id="waitOverlay">
-          <div class="wait-inner">
-            <div class="wait-icon">⏳</div>
-            <div class="wait-title" id="waitTitle">WAIT...</div>
-            <div class="wait-sub" id="waitSub">P2 is playing</div>
-          </div>
-        </div>
       </div>
+    </div>
+
+    <!-- WAIT BAR BELOW BOARD -->
+    <div class="wait-bar hidden" id="waitBar">
+      <span class="wb-dot"></span>
+      <span class="wb-text" id="waitBarText">P2 is playing...</span>
     </div>
 
     <div class="adjust-row hidden" id="adjustRow">
@@ -225,10 +227,12 @@
     </div>
 
     <div class="reactions-row">
-      <button class="reaction" data-emoji="👏">👏</button>
-      <button class="reaction" data-emoji="🔥">🔥</button>
-      <button class="reaction" data-emoji="😎">😎</button>
-      <button class="reaction" data-emoji="🎯">🎯</button>
+      <button class="reaction" data-msg="Great Shot!">Great Shot!</button>
+      <button class="reaction" data-msg="Cool!">Cool!</button>
+      <button class="reaction" data-msg="Nice Try!">Nice Try!</button>
+      <button class="reaction" data-msg="Thanks!">Thanks!</button>
+      <button class="reaction" data-msg="Oof!">Oof!</button>
+      <button class="reaction" data-msg="Lucky!">Lucky!</button>
     </div>
 
     <div id="gameOverOverlay" class="gameover hidden">
@@ -244,7 +248,7 @@
   </div>
 
   <div id="toastContainer" class="toast-container"></div>
-  <div id="emojiLayer" class="emoji-layer"></div>
-  <script src="script.js"></script>
+  <div id="chatLayer" class="chat-layer"></div>
+  <script src="script.js?v=5"></script>
 </body>
 </html>
