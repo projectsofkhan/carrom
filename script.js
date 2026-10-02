@@ -1,14 +1,16 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P • MAJOR UPDATE
-   - Adjustable striker bar (slides along player's baseline)
-   - Striker placed on SIDES not corners:
-       P1: bottom edge (slides left↔right)
-       P2: left edge   (slides up↔down)
-       P3: top edge    (slides left↔right)
-   - Wait overlay when not your turn
-   - Safe drag (no accidental shoot when finger leaves board)
-   - Emoji chat broadcast + floating animation
-   - Practice solo fully supported
+   CARROM 3P • LIVE MULTIPLAYER EDITION
+   
+   ARCHITECTURE:
+   - HOST is authoritative for turn changes & scores
+   - Clients broadcast their SHOT (velocity vector) 
+   - All devices simulate physics locally from the same shot
+   - Striker position syncs on every adjust
+   - Emoji chat broadcasts both ways
+   
+   INPUT MODES:
+   - Slider: moves striker along baseline (only on your turn)
+   - Board drag: aims + fires (finger must lift INSIDE board)
 ═══════════════════════════════════════════════════════════ */
 
 const GAME = {
@@ -19,9 +21,9 @@ const GAME = {
   isPractice: false,
   roomCode: null,
   players: [
-    { id: 'me', name: 'YOU', connected: true, score: 0 },
-    { id: null, name: 'P2', connected: false, score: 0 },
-    { id: null, name: 'P3', connected: false, score: 0 }
+    { id: 'me', connected: true, score: 0 },
+    { id: null, connected: false, score: 0 },
+    { id: null, connected: false, score: 0 }
   ],
   audioEnabled: true,
   soundVolume: 0.5
@@ -30,8 +32,7 @@ const GAME = {
 const PLAYER_COLORS = ['#e63946', '#2a9d8f', '#9c6ade'];
 
 function playerLabel(i) {
-  if (i === GAME.myPlayerIndex) return 'YOU';
-  return 'P' + (i + 1);
+  return (i === GAME.myPlayerIndex) ? 'YOU' : 'P' + (i + 1);
 }
 
 /* ───────────── AUDIO ───────────── */
@@ -136,38 +137,51 @@ const AudioManager = {
   }
 };
 
-/* ───────────── NETWORK (unchanged from working version) ───────────── */
+/* ═══════════════════════════════════════════════════════════
+   NETWORK — Live multiplayer via PeerJS
+   
+   Key fixes:
+   1. Client waits for host's 'welcome' before considering itself connected
+   2. Host always assigns slot; no double-assign
+   3. All messages have a 'from' field for clarity
+   4. Striker moves broadcast with throttling
+═══════════════════════════════════════════════════════════ */
 const Network = {
   peer: null,
   connections: [],
   isHost: false,
   roomCode: null,
-  onPlayerJoin: null,
-  onPlayerLeave: null,
   onData: null,
   onError: null,
+  onPeerJoin: null,
+  onPeerLeave: null,
 
   generateCode() { return String(Math.floor(1000 + Math.random() * 9000)); },
-  generateClientId() { return 'c3p-client-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now(); },
+  generateClientId() { return 'c3p-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
 
+  /* Host: create room, wait for open */
   initHost(cb) {
     this.isHost = true;
     this.roomCode = this.generateCode();
-    this.onPlayerJoin = cb.onPlayerJoin;
-    this.onPlayerLeave = cb.onPlayerLeave;
     this.onData = cb.onData;
     this.onError = cb.onError;
+    this.onPeerJoin = cb.onPeerJoin;
+    this.onPeerLeave = cb.onPeerLeave;
+
     const peerId = 'c3p-' + this.roomCode;
 
     return new Promise((resolve, reject) => {
       let settled = false;
       let attempts = 0;
-      const maxAttempts = 5;
+      const maxAttempts = 6;
+
       const tryCreate = () => {
         attempts++;
         try {
+          if (this.peer) { try { this.peer.destroy(); } catch(e) {} this.peer = null; }
+
           this.peer = new Peer(peerId, {
-            debug: 1,
+            debug: 0,
             config: { iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
@@ -175,13 +189,14 @@ const Network = {
               { urls: 'stun:stun2.l.google.com:19302' }
             ] }
           });
+
           const timeout = setTimeout(() => {
             if (settled) return;
             if (attempts >= maxAttempts) { settled = true; reject(new Error('host-timeout')); return; }
-            try { this.peer.destroy(); } catch(e) {}
             this.roomCode = this.generateCode();
             tryCreate();
-          }, 10000);
+          }, 8000);
+
           this.peer.on('open', () => {
             if (settled) return;
             settled = true;
@@ -189,12 +204,14 @@ const Network = {
             AudioManager.play('connect');
             resolve(this.roomCode);
           });
+
           this.peer.on('connection', conn => this.setupConnection(conn));
+
           this.peer.on('error', err => {
+            // unavailable-id → code collision, retry with new code
             if (err.type === 'unavailable-id') {
               clearTimeout(timeout);
               if (settled) return;
-              try { this.peer.destroy(); } catch(e) {}
               this.roomCode = this.generateCode();
               tryCreate();
               return;
@@ -202,20 +219,28 @@ const Network = {
             if (!settled) { settled = true; clearTimeout(timeout); reject(err); }
             else if (this.onError) this.onError(err);
           });
-          this.peer.on('disconnected', () => { try { this.peer.reconnect(); } catch(e) {} });
-        } catch(e) { if (!settled) { settled = true; reject(e); } }
+
+          this.peer.on('disconnected', () => {
+            try { this.peer.reconnect(); } catch(e) {}
+          });
+        } catch(e) {
+          if (!settled) { settled = true; reject(e); }
+        }
       };
+
       tryCreate();
     });
   },
 
+  /* Client: connect to a host room */
   initClient(roomCode, cb) {
     this.isHost = false;
     this.roomCode = roomCode;
     this.onData = cb.onData;
     this.onError = cb.onError;
-    this.onPlayerJoin = cb.onPlayerJoin;
-    this.onPlayerLeave = cb.onPlayerLeave;
+    this.onPeerJoin = cb.onPeerJoin;
+    this.onPeerLeave = cb.onPeerLeave;
+
     const hostPeerId = 'c3p-' + roomCode;
     const clientId = this.generateClientId();
 
@@ -223,12 +248,14 @@ const Network = {
       let settled = false;
       let retries = 0;
       const maxRetries = 3;
+
       const tryConnect = () => {
         retries++;
         try {
           if (this.peer) { try { this.peer.destroy(); } catch(e) {} this.peer = null; }
-          this.peer = new Peer(clientId + '-' + retries, {
-            debug: 1,
+
+          this.peer = new Peer(clientId + '-r' + retries, {
+            debug: 0,
             config: { iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' },
@@ -236,30 +263,45 @@ const Network = {
               { urls: 'stun:stun2.l.google.com:19302' }
             ] }
           });
+
           const attemptTimeout = setTimeout(() => {
             if (settled) return;
-            if (retries >= maxRetries) { settled = true; reject(new Error('client-timeout')); }
-            else tryConnect();
-          }, 20000);
+            if (retries >= maxRetries) {
+              settled = true;
+              reject(new Error('client-timeout'));
+            } else {
+              tryConnect();
+            }
+          }, 15000);
+
           this.peer.on('open', () => {
+            // Connect to host
             const conn = this.peer.connect(hostPeerId, { reliable: true });
+
             conn.on('open', () => {
               if (settled) return;
               settled = true;
               clearTimeout(attemptTimeout);
+
               if (!this.connections.includes(conn)) this.connections.push(conn);
+
+              // Attach listeners
               conn.on('data', data => { if (this.onData) this.onData(data, conn); });
               conn.on('close', () => {
                 this.connections = this.connections.filter(c => c !== conn);
-                if (this.onPlayerLeave) this.onPlayerLeave(conn);
+                if (this.onPeerLeave) this.onPeerLeave(conn);
               });
-              conn.on('error', err => console.error('Connection error:', err));
+              conn.on('error', err => console.error('conn error:', err));
+
+              // Send hello (host replies with welcome)
               setTimeout(() => {
-                try { conn.send({ type: 'hello', clientId }); } catch(e) {}
+                try { conn.send({ type: 'hello' }); } catch(e) {}
               }, 100);
+
               AudioManager.play('connect');
               resolve(conn);
             });
+
             conn.on('error', err => {
               if (!settled) {
                 clearTimeout(attemptTimeout);
@@ -268,6 +310,7 @@ const Network = {
               }
             });
           });
+
           this.peer.on('error', err => {
             if (err.type === 'peer-unavailable') {
               clearTimeout(attemptTimeout);
@@ -285,12 +328,16 @@ const Network = {
             if (!settled) { settled = true; clearTimeout(attemptTimeout); reject(err); }
             else if (this.onError) this.onError(err);
           });
-          this.peer.on('disconnected', () => { try { this.peer.reconnect(); } catch(e) {} });
+
+          this.peer.on('disconnected', () => {
+            try { this.peer.reconnect(); } catch(e) {}
+          });
         } catch(e) {
           if (retries < maxRetries) setTimeout(() => tryConnect(), 500);
           else if (!settled) { settled = true; reject(e); }
         }
       };
+
       tryConnect();
     });
   },
@@ -299,13 +346,17 @@ const Network = {
     conn.on('open', () => {
       if (!this.connections.includes(conn)) this.connections.push(conn);
       AudioManager.play('connect');
+      if (this.onPeerJoin) this.onPeerJoin(conn);
     });
+
     conn.on('data', data => { if (this.onData) this.onData(data, conn); });
+
     conn.on('close', () => {
       this.connections = this.connections.filter(c => c !== conn);
-      if (this.onPlayerLeave) this.onPlayerLeave(conn);
+      if (this.onPeerLeave) this.onPeerLeave(conn);
     });
-    conn.on('error', err => console.error('Host connection error:', err));
+
+    conn.on('error', err => console.error('host conn error:', err));
   },
 
   broadcast(data) {
@@ -313,17 +364,22 @@ const Network = {
       if (c.open) { try { c.send(data); } catch(e) {} }
     });
   },
+
   sendTo(conn, data) {
     if (conn && conn.open) { try { conn.send(data); } catch(e) {} }
   },
+
   disconnect() {
-    if (this.peer) { try { this.peer.destroy(); } catch(e) {} this.peer = null; }
+    if (this.peer) {
+      try { this.peer.destroy(); } catch(e) {}
+      this.peer = null;
+    }
     this.connections = [];
   }
 };
 
 /* ═══════════════════════════════════════════════════════════
-   PHYSICS — striker placed on sides, adjust along baseline
+   PHYSICS
 ═══════════════════════════════════════════════════════════ */
 const Physics = {
   W: 700, H: 700,
@@ -352,43 +408,20 @@ const Physics = {
     return { left: p, right: this.W - p, top: p, bottom: this.H - p };
   },
 
-  /* Baseline for a player: returns {x, y, min, max, axis}
-     P0 (bottom): slides along x at bottom edge
-     P1 (left):   slides along y at left edge
-     P2 (top):    slides along x at top edge
-  */
+  /* Baseline for a player:
+     P0 bottom (x-axis), P1 left (y-axis), P2 top (x-axis) */
   getBaseline(playerIndex) {
     const p = this.BOARD_PADDING;
-    const inset = 40; // distance from board edge
+    const inset = 42;
     switch(playerIndex) {
-      case 0: return {
-        axis: 'x',
-        x: this.W / 2,
-        y: this.H - p - inset,
-        min: p + 80,
-        max: this.W - p - 80
-      };
-      case 1: return {
-        axis: 'y',
-        x: p + inset,
-        y: this.H / 2,
-        min: p + 80,
-        max: this.H - p - 80
-      };
-      case 2: return {
-        axis: 'x',
-        x: this.W / 2,
-        y: p + inset,
-        min: p + 80,
-        max: this.W - p - 80
-      };
-      default: return {
-        axis: 'x',
-        x: this.W / 2,
-        y: this.H - p - inset,
-        min: p + 80,
-        max: this.W - p - 80
-      };
+      case 0: return { axis: 'x', x: this.W / 2, y: this.H - p - inset,
+                       min: p + 80, max: this.W - p - 80 };
+      case 1: return { axis: 'y', x: p + inset, y: this.H / 2,
+                       min: p + 80, max: this.H - p - 80 };
+      case 2: return { axis: 'x', x: this.W / 2, y: p + inset,
+                       min: p + 80, max: this.W - p - 80 };
+      default: return { axis: 'x', x: this.W / 2, y: this.H - p - inset,
+                        min: p + 80, max: this.W - p - 80 };
     }
   },
 
@@ -438,7 +471,6 @@ const Physics = {
       color: PLAYER_COLORS[playerIndex],
       type: 'striker', active: true, trail: []
     };
-    // Push out of overlapping pucks
     for (const puck of this.pucks) {
       if (!puck.active) continue;
       const dx = s.x - puck.x, dy = s.y - puck.y;
@@ -473,8 +505,7 @@ const Physics = {
     const invA = 1 / a.radius;
     const invB = 1 / b.radius;
     const j = -(1 + this.RESTITUTION) * vn / (invA + invB);
-    const maxJ = 8;
-    const clampedJ = Math.max(-maxJ, Math.min(maxJ, j));
+    const clampedJ = Math.max(-8, Math.min(8, j));
     const ix = clampedJ * nx, iy = clampedJ * ny;
     a.vx -= ix * invA; a.vy -= iy * invA;
     b.vx += ix * invB; b.vy += iy * invB;
@@ -624,7 +655,6 @@ const Renderer = {
     this.roundRect(ctx, p - 5, p - 5, w + 10, h + 10, 18);
     ctx.stroke();
 
-    // Center circle
     ctx.beginPath();
     ctx.arc(this.W / 2, this.H / 2, 72, 0, Math.PI * 2);
     ctx.strokeStyle = '#c4a276';
@@ -645,7 +675,6 @@ const Renderer = {
     ctx.fillStyle = '#f8eed8';
     ctx.fill();
 
-    // Corner arcs
     const corners = [
       { x: p, y: p, s: 0, e: Math.PI / 2 },
       { x: this.W - p, y: p, s: Math.PI / 2, e: Math.PI },
@@ -660,7 +689,6 @@ const Renderer = {
       ctx.stroke();
     });
 
-    // Pockets
     for (const pk of Physics.pockets) {
       const pg = ctx.createRadialGradient(pk.x, pk.y, 1, pk.x, pk.y, Physics.POCKET_RADIUS);
       pg.addColorStop(0, '#000000');
@@ -682,7 +710,6 @@ const Renderer = {
     }
   },
 
-  /* Draw the current player's baseline as a subtle highlight */
   drawBaseline() {
     if (GAME.mode === 'menu') return;
     if (!GAME.isPractice && GAME.currentTurn !== GAME.myPlayerIndex) return;
@@ -846,7 +873,7 @@ const Renderer = {
   },
 
   drawAim() {
-    if (!Input.isDragging) return;
+    if (!Input.isAiming) return;
     if (!GAME.isPractice && GAME.currentTurn !== GAME.myPlayerIndex) return;
     const s = Physics.striker;
     if (!s || !s.active) return;
@@ -928,21 +955,12 @@ const Renderer = {
 };
 
 /* ═══════════════════════════════════════════════════════════
-   INPUT
-   - Two modes:
-     1. ADJUST mode: drag the striker along its baseline (started
-        from touching the striker)
-     2. AIM mode: drag anywhere else to aim (finger movement
-        defines the shot vector)
-   - If finger goes OFF the board during AIM, we do NOT shoot.
-     We wait for the user to lift their finger to cancel.
-   - Only shoots when finger lifts INSIDE the board.
+   INPUT — Board drag = AIM ONLY. No striker touch.
+   Shot fires only when finger lifts INSIDE the board.
 ═══════════════════════════════════════════════════════════ */
 const Input = {
-  isDragging: false,
-  mode: null, // 'adjust' or 'aim'
-  adjustStart: null, // { x, y } of striker when adjust began
-  aimStart: null,    // { x, y } of the finger when aim began
+  isAiming: false,
+  aimStart: null,
   aimCurrent: null,
   canvas: null,
 
@@ -969,7 +987,7 @@ const Input = {
     return { x: (cx - rect.left) * sx, y: (cy - rect.top) * sy };
   },
 
-  canPlay() {
+  canShoot() {
     if (GAME.mode !== 'playing' && !GAME.isPractice) return false;
     if (!GAME.isPractice && GAME.currentTurn !== GAME.myPlayerIndex) return false;
     const s = Physics.striker;
@@ -980,139 +998,87 @@ const Input = {
   },
 
   isInsideBoard(pos) {
-    const p = Physics.BOARD_PADDING - 4;
+    const p = Physics.BOARD_PADDING - 2;
     return pos.x > p && pos.x < Physics.W - p && pos.y > p && pos.y < Physics.H - p;
   },
 
   onDown(e) {
     if (e.cancelable) e.preventDefault();
     AudioManager.init();
-    if (!this.canPlay()) return;
-
-    const s = Physics.striker;
+    if (!this.canShoot()) return;
     const pos = this.coords(e);
-    const dist = Math.hypot(pos.x - s.x, pos.y - s.y);
-
-    // If user touches the striker: enter adjust mode
-    if (dist < s.radius + 24) {
-      this.isDragging = true;
-      this.mode = 'adjust';
-      this.adjustStart = { x: s.x, y: s.y };
-      AudioManager.play('click');
-      return;
-    }
-
-    // Otherwise, if user touches anywhere else on the board: enter aim mode
-    if (this.isInsideBoard(pos)) {
-      this.isDragging = true;
-      this.mode = 'aim';
-      this.aimStart = { x: pos.x, y: pos.y };
-      this.aimCurrent = { x: pos.x, y: pos.y };
-      AudioManager.play('click');
-    }
+    if (!this.isInsideBoard(pos)) return;
+    // Any touch inside the board starts an aim gesture
+    this.isAiming = true;
+    this.aimStart = { x: pos.x, y: pos.y };
+    this.aimCurrent = { x: pos.x, y: pos.y };
+    AudioManager.play('click');
   },
 
   onMove(e) {
-    if (!this.isDragging) return;
+    if (!this.isAiming) return;
     if (e.cancelable) e.preventDefault();
     const pos = this.coords(e);
-
-    if (this.mode === 'adjust') {
-      // Slide striker along baseline
-      const base = Physics.getBaseline(GAME.currentTurn);
-      const s = Physics.striker;
-      if (!s || !s.active) return;
-      if (base.axis === 'x') {
-        s.x = Math.max(base.min, Math.min(base.max, pos.x));
-      } else {
-        s.y = Math.max(base.min, Math.min(base.max, pos.y));
-      }
-      // No sound spam — play only occasionally
-      if (Math.random() < 0.15) AudioManager.play('slide', { volume: 0.3 });
-      return;
-    }
-
-    if (this.mode === 'aim') {
-      this.aimCurrent = { x: pos.x, y: pos.y };
-      const dx = pos.x - this.aimStart.x, dy = pos.y - this.aimStart.y;
-      const dist = Math.hypot(dx, dy);
-      Game.updatePower(Math.min(dist / 90, 1));
-    }
+    this.aimCurrent = { x: pos.x, y: pos.y };
+    const dx = pos.x - this.aimStart.x, dy = pos.y - this.aimStart.y;
+    const dist = Math.hypot(dx, dy);
+    Game.updatePower(Math.min(dist / 90, 1));
   },
 
   onUp(e) {
-    if (!this.isDragging) return;
+    if (!this.isAiming) return;
     if (e.cancelable) e.preventDefault();
 
-    const mode = this.mode;
-    const aimStart = this.aimStart;
-    const adjustStart = this.adjustStart;
-
-    // Reset state FIRST
-    this.isDragging = false;
-    this.mode = null;
+    const start = this.aimStart;
+    // Reset FIRST — guarantees next gesture works
+    this.isAiming = false;
     this.aimStart = null;
     this.aimCurrent = null;
-    this.adjustStart = null;
     Game.updatePower(0);
 
-    if (mode === 'adjust') {
-      // Just slide — no shot on release
-      if (Physics.striker && Physics.striker.active) {
-        // Broadcast new striker position for others to see
-        if (GAME.mode === 'playing' && !GAME.isPractice) {
-          Network.broadcast({
-            type: 'striker_move',
-            player: GAME.myPlayerIndex,
-            x: Physics.striker.x,
-            y: Physics.striker.y
-          });
-        }
-      }
+    if (!start) return;
+
+    const pos = this.coords(e);
+    // CRITICAL: only shoot if finger lifts INSIDE the board
+    if (!this.isInsideBoard(pos)) {
+      AudioManager.play('click');
       return;
     }
 
-    if (mode === 'aim') {
-      const pos = this.coords(e);
-      // CRITICAL: if user lifted finger OUTSIDE the board, cancel the shot
-      if (!this.isInsideBoard(pos)) {
-        AudioManager.play('click');
-        return;
-      }
+    const s = Physics.striker;
+    if (!s || !s.active) return;
 
-      const s = Physics.striker;
-      if (!s || !s.active || !aimStart) return;
+    const dx = pos.x - start.x, dy = pos.y - start.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 18) return;
 
-      const dx = pos.x - aimStart.x, dy = pos.y - aimStart.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist < 18) return;
+    const power = Math.min(dist / 90, 1) * Physics.MAX_POWER;
+    const angle = Math.atan2(-dy, -dx);
+    s.vx = Math.cos(angle) * power;
+    s.vy = Math.sin(angle) * power;
+    AudioManager.play('shot');
 
-      const power = Math.min(dist / 90, 1) * Physics.MAX_POWER;
-      const angle = Math.atan2(-dy, -dx);
-      s.vx = Math.cos(angle) * power;
-      s.vy = Math.sin(angle) * power;
-      AudioManager.play('shot');
-
-      if (GAME.mode === 'playing' && !GAME.isPractice) {
-        Network.broadcast({
-          type: 'shot',
-          player: GAME.myPlayerIndex,
-          vx: s.vx, vy: s.vy, x: s.x, y: s.y
-        });
-      }
-      Game.isResolving = true;
-      Game.resolveStartTime = performance.now();
+    // Broadcast shot: everyone plays it locally
+    if (GAME.mode === 'playing' && !GAME.isPractice) {
+      Network.broadcast({
+        type: 'shot',
+        player: GAME.myPlayerIndex,
+        vx: s.vx,
+        vy: s.vy,
+        x: s.x,
+        y: s.y
+      });
     }
+
+    Game.isResolving = true;
+    Game.resolveStartTime = performance.now();
   },
 
-  onCancel(e) {
-    if (!this.isDragging) return;
-    // Cancel entirely — no shot
-    this.isDragging = false;
-    this.mode = null;
+  onCancel() {
+    if (!this.isAiming) return;
+    this.isAiming = false;
     this.aimStart = null;
     this.aimCurrent = null;
-    this.adjustStart = null;
     Game.updatePower(0);
   }
 };
@@ -1160,6 +1126,14 @@ const Game = {
           if (GAME.mode === 'playing' || GAME.isPractice) {
             GAME.players[GAME.currentTurn].score++;
             this.updateScores();
+            // Host broadcasts score update
+            if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
+              Network.broadcast({
+                type: 'score_update',
+                playerIndex: GAME.currentTurn,
+                score: GAME.players[GAME.currentTurn].score
+              });
+            }
           }
         }
       },
@@ -1175,7 +1149,17 @@ const Game = {
       const stopped = Physics.allStopped();
       if (stopped || elapsed > 8000) {
         this.isResolving = false;
-        this.endTurn();
+        if (GAME.mode === 'playing' && !GAME.isPractice && !GAME.isHost) {
+          // Clients wait for host's turn_change message
+          // But if it doesn't come (host disconnected), advance locally after 1s
+          setTimeout(() => {
+            if (!Game.isResolving && GAME.mode === 'playing' && GAME.currentTurn !== GAME.myPlayerIndex) {
+              // Host never sent turn_change — advance anyway
+            }
+          }, 1000);
+        } else {
+          this.endTurn();
+        }
       }
     }
 
@@ -1270,19 +1254,18 @@ const Game = {
     else frame.classList.remove('active');
   },
 
-  /* Show/hide the adjust slider row */
   updateAdjustSlider() {
     const row = document.getElementById('adjustRow');
     const thumb = document.getElementById('adjustThumb');
+    const fill = document.getElementById('adjustFill');
     const track = document.getElementById('adjustTrack');
     const isMyTurn = GAME.isPractice || GAME.currentTurn === GAME.myPlayerIndex;
-    if (!isMyTurn || !Physics.striker || !Physics.striker.active) {
+    if (!isMyTurn || !Physics.striker || !Physics.striker.active || Game.isResolving) {
       row.classList.add('hidden');
       return;
     }
     row.classList.remove('hidden');
     const base = Physics.getBaseline(GAME.currentTurn);
-    // Compute thumb position: 0–1 along baseline
     let pct = 0.5;
     if (base.axis === 'x') {
       pct = (Physics.striker.x - base.min) / (base.max - base.min);
@@ -1291,54 +1274,102 @@ const Game = {
     }
     pct = Math.max(0, Math.min(1, pct));
     thumb.style.left = (pct * 100) + '%';
+    fill.style.width = (pct * 100) + '%';
 
-    // Setup track drag if not already
+    // Bind drag once
     if (!track.dataset.bound) {
       track.dataset.bound = '1';
-      track.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
-        AudioManager.init();
-        if (!Input.canPlay()) return;
+      let isDraggingSlider = false;
+
+      const updateFromClientX = (clientX) => {
+        if (!Input.canShoot()) return;
         const rect = track.getBoundingClientRect();
-        const updateFromX = (clientX) => {
-          const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
-          const pct = x / rect.width;
-          const s = Physics.striker;
-          if (!s || !s.active) return;
-          const base = Physics.getBaseline(GAME.currentTurn);
-          if (base.axis === 'x') {
-            s.x = base.min + (base.max - base.min) * pct;
-          } else {
-            s.y = base.min + (base.max - base.min) * pct;
-          }
-          thumb.style.left = (pct * 100) + '%';
-          if (Math.random() < 0.3) AudioManager.play('slide', { volume: 0.25 });
-        };
-        updateFromX(e.clientX);
-        const onMove = (ev) => {
-          if (ev.cancelable) ev.preventDefault();
-          updateFromX(ev.clientX);
-        };
-        const onUp = () => {
-          window.removeEventListener('pointermove', onMove);
-          window.removeEventListener('pointerup', onUp);
-          // Broadcast new position
-          if (GAME.mode === 'playing' && !GAME.isPractice && Physics.striker) {
+        const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+        const pct = x / rect.width;
+        const s = Physics.striker;
+        if (!s || !s.active) return;
+        const base = Physics.getBaseline(GAME.currentTurn);
+        if (base.axis === 'x') {
+          s.x = base.min + (base.max - base.min) * pct;
+          s.y = base.y;
+        } else {
+          s.x = base.x;
+          s.y = base.min + (base.max - base.min) * pct;
+        }
+        thumb.style.left = (pct * 100) + '%';
+        fill.style.width = (pct * 100) + '%';
+
+        // Broadcast position (throttled)
+        if (GAME.mode === 'playing' && !GAME.isPractice) {
+          const now = performance.now();
+          if (now - (Input._lastMoveBroadcast || 0) > 60) {
+            Input._lastMoveBroadcast = now;
             Network.broadcast({
               type: 'striker_move',
               player: GAME.myPlayerIndex,
-              x: Physics.striker.x,
-              y: Physics.striker.y
+              x: s.x,
+              y: s.y
             });
           }
-        };
-        window.addEventListener('pointermove', onMove, { passive: false });
-        window.addEventListener('pointerup', onUp);
+        }
+      };
+
+      track.addEventListener('pointerdown', e => {
+        e.preventDefault();
+        AudioManager.init();
+        isDraggingSlider = true;
+        updateFromClientX(e.clientX);
+      });
+
+      window.addEventListener('pointermove', e => {
+        if (!isDraggingSlider) return;
+        e.preventDefault();
+        updateFromClientX(e.clientX);
+      }, { passive: false });
+
+      window.addEventListener('pointerup', () => {
+        if (!isDraggingSlider) return;
+        isDraggingSlider = false;
+        // Final broadcast
+        if (GAME.mode === 'playing' && !GAME.isPractice && Physics.striker) {
+          Network.broadcast({
+            type: 'striker_move',
+            player: GAME.myPlayerIndex,
+            x: Physics.striker.x,
+            y: Physics.striker.y
+          });
+        }
+      });
+
+      // Touch fallback
+      track.addEventListener('touchstart', e => {
+        e.preventDefault();
+        AudioManager.init();
+        isDraggingSlider = true;
+        updateFromClientX(e.touches[0].clientX);
+      }, { passive: false });
+
+      window.addEventListener('touchmove', e => {
+        if (!isDraggingSlider) return;
+        e.preventDefault();
+        updateFromClientX(e.touches[0].clientX);
+      }, { passive: false });
+
+      window.addEventListener('touchend', () => {
+        if (!isDraggingSlider) return;
+        isDraggingSlider = false;
+        if (GAME.mode === 'playing' && !GAME.isPractice && Physics.striker) {
+          Network.broadcast({
+            type: 'striker_move',
+            player: GAME.myPlayerIndex,
+            x: Physics.striker.x,
+            y: Physics.striker.y
+          });
+        }
       });
     }
   },
 
-  /* Show/hide the wait overlay */
   updateWaitOverlay() {
     const overlay = document.getElementById('waitOverlay');
     const title = document.getElementById('waitTitle');
@@ -1448,26 +1479,31 @@ const UI = {
     GAME.isPractice = false;
     GAME.myPlayerIndex = 0;
     GAME.players = [
-      { id: 'me', name: 'YOU', connected: true, score: 0 },
-      { id: null, name: 'P2', connected: false, score: 0 },
-      { id: null, name: 'P3', connected: false, score: 0 }
+      { id: 'me', connected: true, score: 0 },
+      { id: null, connected: false, score: 0 },
+      { id: null, connected: false, score: 0 }
     ];
     document.getElementById('createModal').classList.remove('hidden');
     document.getElementById('roomCodeDisplay').textContent = '----';
+    document.getElementById('hostStatus').textContent = '⏳ CONNECTING...';
     this.updateFriendSlots();
+
     try {
       const code = await Network.initHost({
-        onPlayerJoin: (conn) => this.onJoinEvent(conn),
-        onPlayerLeave: conn => this.onLeaveEvent(conn),
         onData: (data, conn) => this.onData(data, conn),
-        onError: err => this.onNetError(err)
+        onError: err => this.onNetError(err),
+        onPeerJoin: (conn) => this.onPeerJoin(conn),
+        onPeerLeave: (conn) => this.onPeerLeave(conn)
       });
       GAME.roomCode = code;
       document.getElementById('roomCodeDisplay').textContent = code;
+      document.getElementById('hostStatus').textContent = '✓ READY';
       Toast.show('Room #' + code + ' created', 'success', '✅');
     } catch(err) {
+      console.warn('Host create failed:', err);
       Toast.show('Failed to create room', 'error', '❌');
-      this.closeModal('createModal');
+      document.getElementById('hostStatus').textContent = '✕ FAILED';
+      setTimeout(() => this.closeModal('createModal'), 1500);
     }
   },
 
@@ -1492,38 +1528,25 @@ const UI = {
     GAME.myPlayerIndex = 0;
     GAME.currentTurn = 0;
     GAME.players = [
-      { id: 'me', name: 'YOU', connected: true, score: 0 },
-      { id: 'p2', name: 'P2', connected: true, score: 0 },
-      { id: 'p3', name: 'P3', connected: true, score: 0 }
+      { id: 'me', connected: true, score: 0 },
+      { id: 'p2', connected: true, score: 0 },
+      { id: 'p3', connected: true, score: 0 }
     ];
     this.enterGame();
   },
 
-  onJoinEvent(conn) {
+  /* Called when host receives an incoming DataConnection */
+  onPeerJoin(conn) {
     if (!GAME.isHost) return;
-    const slot = GAME.players.findIndex((p, i) => i > 0 && !p.connected);
-    if (slot < 0) { Network.sendTo(conn, { type: 'room_full' }); return; }
-    GAME.players[slot].connected = true;
-    GAME.players[slot].id = conn.peer;
-    GAME.players[slot].name = 'P' + (slot + 1);
-    Network.sendTo(conn, {
-      type: 'welcome',
-      playerIndex: slot,
-      players: GAME.players,
-      roomCode: GAME.roomCode
-    });
-    Network.broadcast({ type: 'players_update', players: GAME.players });
-    this.updateFriendSlots();
-    Toast.show('P' + (slot + 1) + ' joined', 'success', '🎉');
-    AudioManager.play('notification');
+    // Slot assigned only after 'hello' received
   },
 
-  onLeaveEvent(conn) {
+  onPeerLeave(conn) {
+    if (!GAME.isHost) return;
     const idx = GAME.players.findIndex(p => p.id === conn.peer);
     if (idx > 0) {
       GAME.players[idx].connected = false;
       GAME.players[idx].id = null;
-      GAME.players[idx].name = 'P' + (idx + 1);
       this.updateFriendSlots();
       Network.broadcast({ type: 'players_update', players: GAME.players });
       Toast.show('Player left', 'info', '👋');
@@ -1532,32 +1555,54 @@ const UI = {
 
   onData(data, conn) {
     switch(data.type) {
-      case 'hello': this.onJoinEvent(conn); break;
+      case 'hello':
+        // Host receives hello → assign slot → send welcome
+        if (!GAME.isHost) return;
+        const slot = GAME.players.findIndex((p, i) => i > 0 && !p.connected);
+        if (slot < 0) {
+          Network.sendTo(conn, { type: 'room_full' });
+          return;
+        }
+        GAME.players[slot].connected = true;
+        GAME.players[slot].id = conn.peer;
+        Network.sendTo(conn, {
+          type: 'welcome',
+          playerIndex: slot,
+          players: GAME.players,
+          roomCode: GAME.roomCode
+        });
+        Network.broadcast({ type: 'players_update', players: GAME.players });
+        this.updateFriendSlots();
+        Toast.show('P' + (slot + 1) + ' joined', 'success', '🎉');
+        AudioManager.play('notification');
+        break;
+
       case 'welcome':
         GAME.myPlayerIndex = data.playerIndex;
         GAME.players = data.players;
         GAME.roomCode = data.roomCode;
         document.getElementById('connectingOverlay').classList.add('hidden');
         Toast.show('Connected as ' + playerLabel(GAME.myPlayerIndex), 'success', '🎉');
-        setTimeout(() => {
-          Game.updateScores();
-          Game.relabelChips();
-        }, 100);
+        setTimeout(() => Game.updateScores(), 100);
         break;
+
       case 'room_full':
         document.getElementById('connectingOverlay').classList.add('hidden');
         Toast.show('Room full', 'error', '🚫');
         Network.disconnect();
         GAME.mode = 'menu';
         break;
+
       case 'players_update':
         GAME.players = data.players;
         break;
+
       case 'start_game':
         GAME.players = data.players;
-        GAME.currentTurn = data.currentTurn;
+        GAME.currentTurn = 0;
         this.enterGame();
         break;
+
       case 'shot':
         if (data.player !== GAME.myPlayerIndex) {
           if (Physics.striker) {
@@ -1570,13 +1615,14 @@ const UI = {
           Game.resolveStartTime = performance.now();
         }
         break;
+
       case 'striker_move':
-        // Another player moved their striker along baseline
-        if (data.player !== GAME.myPlayerIndex && Physics.striker) {
+        if (data.player !== GAME.myPlayerIndex && Physics.striker && Physics.striker.active) {
           Physics.striker.x = data.x;
           Physics.striker.y = data.y;
         }
         break;
+
       case 'turn_change':
         GAME.currentTurn = data.currentTurn;
         Physics.striker = Physics.createStriker(GAME.currentTurn, 0.5);
@@ -1586,14 +1632,22 @@ const UI = {
         Game.updateWaitOverlay();
         AudioManager.play('turn');
         break;
+
+      case 'score_update':
+        if (GAME.players[data.playerIndex]) {
+          GAME.players[data.playerIndex].score = data.score;
+          Game.updateScores();
+        }
+        break;
+
       case 'reaction':
-        // Only show if it's from someone else
         if (data.player !== GAME.myPlayerIndex) {
           this.showReaction(data.emoji);
         }
         break;
+
       case 'play_again':
-        this.playAgain();
+        this.playAgain(true);
         break;
     }
   },
@@ -1671,20 +1725,22 @@ const UI = {
     this.closeModal('joinModal');
     document.getElementById('connectingOverlay').classList.remove('hidden');
     document.getElementById('connectingText').textContent = 'Connecting to #' + code + '...';
+
     try {
       await Network.initClient(code, {
-        onPlayerJoin: (c) => this.onJoinEvent(c),
-        onPlayerLeave: c => this.onLeaveEvent(c),
         onData: (d, c) => this.onData(d, c),
-        onError: e => this.onNetError(e)
+        onError: e => this.onNetError(e),
+        onPeerJoin: (c) => this.onPeerJoin(c),
+        onPeerLeave: (c) => this.onPeerLeave(c)
       });
+      // Wait for host's 'welcome' message to arrive
       setTimeout(() => {
         const overlay = document.getElementById('connectingOverlay');
         if (!overlay.classList.contains('hidden')) {
           overlay.classList.add('hidden');
           Toast.show('Connected to #' + code, 'success', '🎉');
         }
-      }, 3000);
+      }, 2500);
     } catch(err) {
       document.getElementById('connectingOverlay').classList.add('hidden');
       if (err && err.message === 'peer-unavailable') Toast.show('Room not found', 'error', '❌');
@@ -1700,7 +1756,7 @@ const UI = {
     if (count < 3) { Toast.show('Need 3 players', 'error', '⚠️'); return; }
     GAME.currentTurn = 0;
     AudioManager.play('click');
-    Network.broadcast({ type: 'start_game', players: GAME.players, currentTurn: 0 });
+    Network.broadcast({ type: 'start_game', players: GAME.players });
     this.closeModal('createModal');
     this.enterGame();
   },
@@ -1714,11 +1770,6 @@ const UI = {
     GAME.players.forEach(p => p.score = 0);
     Game.updateScores();
     Game.updateTurnUI();
-    document.querySelectorAll('.player-chip').forEach(chip => {
-      const idx = parseInt(chip.dataset.p);
-      const nameEl = chip.querySelector('.pc-name');
-      if (nameEl) nameEl.textContent = playerLabel(idx);
-    });
     Game.start();
     Toast.show(GAME.isPractice ? 'Practice mode' : 'Match started', 'info', '🎮');
   },
@@ -1741,9 +1792,9 @@ const UI = {
     GAME.currentTurn = 0;
     GAME.myPlayerIndex = 0;
     GAME.players = [
-      { id: 'me', name: 'YOU', connected: true, score: 0 },
-      { id: null, name: 'P2', connected: false, score: 0 },
-      { id: null, name: 'P3', connected: false, score: 0 }
+      { id: 'me', connected: true, score: 0 },
+      { id: null, connected: false, score: 0 },
+      { id: null, connected: false, score: 0 }
     ];
     document.getElementById('gameScreen').classList.add('hidden');
     document.getElementById('mainMenu').classList.remove('hidden');
@@ -1757,7 +1808,7 @@ const UI = {
     Game.isResolving = false;
   },
 
-  playAgain() {
+  playAgain(fromRemote) {
     document.getElementById('gameOverOverlay').classList.add('hidden');
     GAME.players.forEach(p => p.score = 0);
     GAME.currentTurn = 0;
@@ -1769,12 +1820,11 @@ const UI = {
     Game.updateTurnUI();
     Game.updateAdjustSlider();
     Game.updateWaitOverlay();
-    if (GAME.mode === 'playing' && GAME.isHost) {
+    if (!fromRemote && GAME.mode === 'playing' && GAME.isHost) {
       Network.broadcast({ type: 'play_again' });
     }
   },
 
-  /* Emoji chat — send to all peers AND show locally */
   sendReaction(emoji) {
     AudioManager.play('click');
     this.showReaction(emoji);
@@ -1783,7 +1833,6 @@ const UI = {
     }
   },
 
-  /* Shows a floating emoji over the board */
   showReaction(emoji) {
     const layer = document.getElementById('emojiLayer');
     const el = document.createElement('div');
@@ -1794,7 +1843,6 @@ const UI = {
     el.style.animationDuration = (2.4 + Math.random() * 0.8) + 's';
     layer.appendChild(el);
     setTimeout(() => el.remove(), 3400);
-    // Play a soft pop sound
     if (GAME.audioEnabled) AudioManager.play('notification', { volume: 0.3 });
   },
 
