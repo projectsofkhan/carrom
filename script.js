@@ -1,9 +1,8 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P FREESTYLE • MAIN SCRIPT (FIXED P2P)
-   - Host creates room via CREATE ROOM button
-   - Friends join via JOIN ROOM button (4-digit code)
-   - FIX: Client now waits for actual DataConnection open
-   - FIX: Extended timeout, better retries, no false negatives
+   CARROM 3P FREESTYLE • MAIN SCRIPT (RACE-CONDITION FIXED)
+   - Client sends 'hello' after listeners attached
+   - Host waits for 'hello' before sending 'welcome'
+   - Guarantees no messages are lost during handshake
 ═══════════════════════════════════════════════════════════ */
 
 const GAME = {
@@ -25,24 +24,21 @@ const GAME = {
 const PLAYER_COLORS = ['#e63946', '#2a9d8f', '#9c6ade'];
 
 /* ─────────────────────────────────────────────
-   AUDIO
+   AUDIO (unchanged)
 ───────────────────────────────────────────── */
 const AudioManager = {
   _ctx: null,
-
   init() {
     if (!this._ctx) {
       try { this._ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
     }
     if (this._ctx && this._ctx.state === 'suspended') this._ctx.resume();
   },
-
   play(type, options = {}) {
     if (!GAME.audioEnabled) return;
     const { pan = 0, volume = 1 } = options;
     this.synth(type, pan, volume);
   },
-
   synth(type, pan, volume) {
     if (!this._ctx) return;
     try {
@@ -81,7 +77,6 @@ const AudioManager = {
       }
     } catch(e) {}
   },
-
   tone(ctx, dest, f1, f2, wave, dur, gv) {
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
@@ -97,7 +92,6 @@ const AudioManager = {
     osc.start(now);
     osc.stop(now + dur + 0.02);
   },
-
   noise(ctx, dest, dur, gv) {
     const now = ctx.currentTime;
     const size = ctx.sampleRate * dur;
@@ -113,7 +107,6 @@ const AudioManager = {
     gain.connect(dest);
     src.start(now);
   },
-
   melody(ctx, dest, notes, noteDur, gv) {
     let t = ctx.currentTime;
     notes.forEach(freq => {
@@ -134,13 +127,17 @@ const AudioManager = {
 };
 
 /* ═══════════════════════════════════════════════════════════
-   NETWORK — FIXED VERSION
-   Key changes:
-   1. initClient resolves ONLY when DataConnection actually opens
-   2. Retry logic for slow connections
-   3. Host properly tracks multiple connections
-   4. Uses explicit peer IDs for clients too (prevents ID clashes)
-   5. Extended timeouts for slow networks
+   NETWORK — HAND-SHAKE VERSION (fixes 3rd device race)
+   
+   Flow:
+   1. Client connects, opens DataChannel
+   2. Client attaches ALL listeners
+   3. Client sends { type: 'hello' } to host
+   4. Host receives 'hello' → assigns slot → sends 'welcome'
+   5. Client receives 'welcome' → hides overlay → enters lobby
+   
+   This guarantees no messages are sent before the receiver
+   has its listeners ready.
 ═══════════════════════════════════════════════════════════ */
 const Network = {
   peer: null,
@@ -157,12 +154,11 @@ const Network = {
   },
 
   generateClientId() {
-    // Unique client ID to prevent clashes between multiple joiners
     return 'c3p-client-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now();
   },
 
   /* ─────────────────────────────────────────
-     HOST — creates room, listens for joiners
+     HOST
   ───────────────────────────────────────── */
   initHost(cb) {
     this.isHost = true;
@@ -219,7 +215,6 @@ const Network = {
           this.peer.on('error', err => {
             console.warn('Host peer error:', err.type, err);
             if (err.type === 'unavailable-id') {
-              // Room code collision — pick new one
               clearTimeout(timeout);
               if (settled) return;
               try { this.peer.destroy(); } catch(e) {}
@@ -237,7 +232,6 @@ const Network = {
           });
 
           this.peer.on('disconnected', () => {
-            console.warn('Host disconnected, reconnecting...');
             try { this.peer.reconnect(); } catch(e) {}
           });
         } catch(e) {
@@ -250,8 +244,8 @@ const Network = {
   },
 
   /* ─────────────────────────────────────────
-     CLIENT — joins an existing room
-     FIXED: resolves only when DataConnection is OPEN
+     CLIENT — joins room, sends 'hello' after
+     listeners are attached
   ───────────────────────────────────────── */
   initClient(roomCode, cb) {
     this.isHost = false;
@@ -272,7 +266,6 @@ const Network = {
       const tryConnect = () => {
         retries++;
         try {
-          // Create a fresh peer for each retry attempt
           if (this.peer) {
             try { this.peer.destroy(); } catch(e) {}
             this.peer = null;
@@ -290,10 +283,8 @@ const Network = {
             }
           });
 
-          // Give up after 20 seconds per attempt
           const attemptTimeout = setTimeout(() => {
             if (settled) return;
-            console.warn('Attempt ' + retries + ' timed out');
             if (retries >= maxRetries) {
               settled = true;
               reject(new Error('client-timeout'));
@@ -303,42 +294,44 @@ const Network = {
           }, 20000);
 
           this.peer.on('open', () => {
-            console.log('Client peer opened, connecting to host:', hostPeerId);
-            
             const conn = this.peer.connect(hostPeerId, { reliable: true });
 
-            // ⭐ CRITICAL FIX: Resolve only when the connection is TRULY open
             conn.on('open', () => {
-              console.log('✅ DataConnection to host OPEN');
               if (settled) return;
               settled = true;
               clearTimeout(attemptTimeout);
-              
-              // Register the connection
+
               if (!this.connections.includes(conn)) {
                 this.connections.push(conn);
               }
-              
-              // Attach data + close handlers
+
+              // ⭐ Attach ALL listeners FIRST
               conn.on('data', data => {
                 if (this.onData) this.onData(data, conn);
               });
-              
+
               conn.on('close', () => {
-                console.log('Connection closed by host');
                 this.connections = this.connections.filter(c => c !== conn);
                 if (this.onPlayerLeave) this.onPlayerLeave(conn);
               });
-              
-              conn.on('error', err => {
-                console.error('Connection error:', err);
-              });
+
+              conn.on('error', err => console.error('Connection error:', err));
+
+              // ⭐ THEN send 'hello' — host will reply with 'welcome'
+              // Add a small delay to be extra safe
+              setTimeout(() => {
+                try {
+                  conn.send({ type: 'hello', clientId: clientId });
+                  console.log('📤 Sent hello to host');
+                } catch(e) {
+                  console.error('Failed to send hello:', e);
+                }
+              }, 100);
 
               AudioManager.play('connect');
               resolve(conn);
             });
 
-            // Handle connection-level errors
             conn.on('error', err => {
               console.error('Connection setup error:', err);
               if (!settled) {
@@ -357,7 +350,6 @@ const Network = {
             console.warn('Client peer error:', err.type, err);
             
             if (err.type === 'peer-unavailable') {
-              // Host not found — retry or reject
               clearTimeout(attemptTimeout);
               if (!settled) {
                 if (retries < maxRetries) {
@@ -371,11 +363,8 @@ const Network = {
             }
             
             if (err.type === 'unavailable-id') {
-              // Our generated client ID clashed — retry with new one
               clearTimeout(attemptTimeout);
-              if (!settled) {
-                setTimeout(() => tryConnect(), 200);
-              }
+              if (!settled) setTimeout(() => tryConnect(), 200);
               return;
             }
             
@@ -389,11 +378,9 @@ const Network = {
           });
 
           this.peer.on('disconnected', () => {
-            console.warn('Client disconnected, reconnecting...');
             try { this.peer.reconnect(); } catch(e) {}
           });
         } catch(e) {
-          console.error('tryConnect exception:', e);
           if (retries < maxRetries) {
             setTimeout(() => tryConnect(), 500);
           } else if (!settled) {
@@ -408,7 +395,10 @@ const Network = {
   },
 
   /* ─────────────────────────────────────────
-     HOST SIDE — accept an incoming connection
+     HOST SIDE — accept incoming connection.
+     NOTE: We do NOT immediately assign a slot
+     or send 'welcome' here. We wait for the
+     client to send 'hello' first.
   ───────────────────────────────────────── */
   setupConnection(conn) {
     conn.on('open', () => {
@@ -419,7 +409,9 @@ const Network = {
       }
       
       AudioManager.play('connect');
-      if (this.onPlayerJoin) this.onPlayerJoin(conn, this.connections.length);
+      // NOTE: we do NOT call onPlayerJoin here.
+      // We wait for the 'hello' message from the client.
+      // This guarantees the client is fully ready to receive.
     });
 
     conn.on('data', data => {
@@ -457,7 +449,7 @@ const Network = {
 };
 
 /* ─────────────────────────────────────────────
-   PHYSICS
+   PHYSICS (unchanged)
 ───────────────────────────────────────────── */
 const Physics = {
   W: 700, H: 700,
@@ -539,20 +531,16 @@ const Physics = {
       const nx = dx / dist, ny = dy / dist;
       a.x -= nx * overlap; a.y -= ny * overlap;
       b.x += nx * overlap; b.y += ny * overlap;
-
       const dvx = b.vx - a.vx, dvy = b.vy - a.vy;
       const vn = dvx * nx + dvy * ny;
       if (vn > 0) return;
-
       const e = 0.88;
       const j = -(1 + e) * vn / (1/a.radius + 1/b.radius);
       const ix = j * nx, iy = j * ny;
       a.vx -= ix / a.radius; a.vy -= iy / a.radius;
       b.vx += ix / b.radius; b.vy += iy / b.radius;
-
       const speed = Math.abs(vn);
       if (speed > 0.5 && onHit) onHit(Math.min(speed / 15, 1), (a.x + b.x) / 2, (a.y + b.y) / 2);
-
       for (let i = 0; i < 8; i++) {
         const ang = Math.random() * Math.PI * 2;
         const spd = 1 + Math.random() * 4;
@@ -639,7 +627,7 @@ const Physics = {
 };
 
 /* ─────────────────────────────────────────────
-   RENDERER
+   RENDERER (unchanged)
 ───────────────────────────────────────────── */
 const Renderer = {
   canvas: null, ctx: null,
@@ -905,7 +893,7 @@ const Renderer = {
 };
 
 /* ─────────────────────────────────────────────
-   INPUT
+   INPUT (unchanged)
 ───────────────────────────────────────────── */
 const Input = {
   isDragging: false,
@@ -994,7 +982,7 @@ const Input = {
 };
 
 /* ─────────────────────────────────────────────
-   GAME CONTROLLER
+   GAME CONTROLLER (unchanged)
 ───────────────────────────────────────────── */
 const Game = {
   isResolving: false,
@@ -1148,7 +1136,7 @@ const Game = {
 };
 
 /* ─────────────────────────────────────────────
-   UI
+   UI — UPDATED onData to handle 'hello' handshake
 ───────────────────────────────────────────── */
 const UI = {
   init() {
@@ -1295,7 +1283,6 @@ const UI = {
     if (!GAME.isHost) return;
     const slot = GAME.players.findIndex((p, i) => i > 0 && !p.connected);
     if (slot < 0) {
-      // Room is full — politely reject
       Network.sendTo(conn, { type: 'room_full' });
       return;
     }
@@ -1303,7 +1290,8 @@ const UI = {
     GAME.players[slot].id = conn.peer;
     GAME.players[slot].name = 'PLAYER ' + (slot + 1);
 
-    // Send welcome to the new joiner
+    // Send welcome (this is now safe because the client sent 'hello'
+    // which means its listeners are attached)
     Network.sendTo(conn, {
       type: 'welcome',
       playerIndex: slot,
@@ -1311,7 +1299,6 @@ const UI = {
       roomCode: GAME.roomCode
     });
 
-    // Broadcast updated player list to everyone
     Network.broadcast({ type: 'players_update', players: GAME.players });
 
     this.updateFriendSlots();
@@ -1331,8 +1318,14 @@ const UI = {
     }
   },
 
-  onData(data) {
+  onData(data, conn) {
     switch(data.type) {
+      case 'hello':
+        // ⭐ Handshake step 1: client says hello → host assigns slot
+        console.log('📥 Host received hello from', conn.peer);
+        this.onJoinEvent(conn);
+        break;
+
       case 'welcome':
         GAME.myPlayerIndex = data.playerIndex;
         GAME.players = data.players;
@@ -1474,15 +1467,15 @@ const UI = {
         onError: e => this.onNetError(e)
       });
 
-      // Connection succeeded — welcome message will hide the overlay
-      // Safety fallback: hide overlay after 2s if welcome hasn't arrived
+      // Connection resolved — we've sent 'hello', waiting for 'welcome'
+      // Add a longer fallback in case welcome is slow
       setTimeout(() => {
         const overlay = document.getElementById('connectingOverlay');
         if (!overlay.classList.contains('hidden')) {
           overlay.classList.add('hidden');
           Toast.show('Connected to room #' + code, 'success', '🎉');
         }
-      }, 2000);
+      }, 3000);
     } catch(err) {
       console.warn('Connect failed:', err);
       document.getElementById('connectingOverlay').classList.add('hidden');
@@ -1614,7 +1607,7 @@ const Toast = {
 };
 
 /* ─────────────────────────────────────────────
-   OPENING
+   OPENING + BOOTSTRAP (unchanged)
 ───────────────────────────────────────────── */
 function runOpening() {
   const fill = document.getElementById('openingBarFill');
@@ -1647,9 +1640,6 @@ function runOpening() {
   });
 }
 
-/* ─────────────────────────────────────────────
-   BOOTSTRAP
-───────────────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', () => {
   UI.init();
   runOpening();
