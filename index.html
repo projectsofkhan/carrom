@@ -21,15 +21,12 @@
   ═══════════════════════════════════════ -->
   <div id="openingScreen" class="opening-screen">
     <div class="opening-inner">
-      
-      <!-- Animated Trio -->
       <div class="opening-trio">
         <span class="trio-dot d1"></span>
         <span class="trio-dot d2"></span>
         <span class="trio-dot d3"></span>
       </div>
       
-      <!-- Waving Title -->
       <h1 class="opening-title">
         <span style="--i:0">C</span>
         <span style="--i:1">A</span>
@@ -41,7 +38,6 @@
       
       <p class="opening-tag">PLAY • WITH • FRIENDS</p>
       
-      <!-- Progress Bar -->
       <div class="opening-bar">
         <div class="opening-bar-fill" id="openingBarFill"></div>
       </div>
@@ -51,12 +47,11 @@
   </div>
 
   <!-- ═══════════════════════════════════════
-       MAIN MENU (SIMPLE)
+       MAIN MENU
   ═══════════════════════════════════════ -->
   <div id="mainMenu" class="main-menu hidden">
     <div class="menu-inner">
       
-      <!-- Simple Header -->
       <div class="menu-top">
         <div class="brand-dots">
           <span></span><span></span><span></span>
@@ -65,19 +60,25 @@
         <p class="menu-sub">Play with two friends</p>
       </div>
 
-      <!-- Single Primary Action -->
+      <!-- TWO PRIMARY ACTIONS -->
       <div class="menu-actions">
-        <button class="action-primary" id="playBtn">
-          <span class="ap-label">PLAY WITH FRIENDS</span>
+        <button class="action-primary create-action" id="createRoomBtn">
+          <span class="ap-icon">＋</span>
+          <span class="ap-label">CREATE ROOM</span>
+          <span class="ap-arrow">→</span>
+        </button>
+        
+        <button class="action-primary join-action" id="joinRoomBtn">
+          <span class="ap-icon">⌂</span>
+          <span class="ap-label">JOIN ROOM</span>
           <span class="ap-arrow">→</span>
         </button>
         
         <button class="action-secondary" id="practiceBtn">
-          <span>Practice Solo</span>
+          <span>PRACTICE SOLO</span>
         </button>
       </div>
 
-      <!-- Simple Footer -->
       <div class="menu-footer">
         <span class="live-dot"></span>
         <span>READY TO PLAY</span>
@@ -86,11 +87,11 @@
   </div>
 
   <!-- ═══════════════════════════════════════
-       HOST / INVITE MODAL
+       CREATE ROOM MODAL (Host)
   ═══════════════════════════════════════ -->
-  <div id="inviteModal" class="modal-overlay hidden">
+  <div id="createModal" class="modal-overlay hidden">
     <div class="modal-box">
-      <button class="modal-x" id="inviteClose">✕</button>
+      <button class="modal-x" id="createClose">✕</button>
       
       <!-- YOU ARE ALWAYS READY -->
       <div class="you-card">
@@ -107,7 +108,7 @@
         <span>INVITE 2 FRIENDS</span>
       </div>
 
-      <!-- Friends slots (empty) -->
+      <!-- Friend slots -->
       <div class="friend-slots" id="friendSlots">
         <div class="friend-slot" data-slot="2">
           <div class="fs-avatar empty">2</div>
@@ -125,11 +126,11 @@
         </div>
       </div>
 
-      <!-- Room code + share -->
+      <!-- Number room code -->
       <div class="code-block">
-        <div class="code-label">ROOM CODE</div>
+        <div class="code-label">ROOM NUMBER</div>
         <div class="code-row">
-          <div class="code-big" id="roomCodeDisplay">------</div>
+          <div class="code-big" id="roomCodeDisplay">----</div>
           <button class="icon-btn" id="copyCodeBtn" title="Copy code">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="9" y="9" width="13" height="13" rx="2"/>
@@ -153,7 +154,6 @@
         Waiting for friends to join...
       </div>
 
-      <!-- Start button — enabled when 3 players -->
       <button class="start-btn" id="startGameBtn" disabled>
         <span id="startBtnText">NEED 2 MORE PLAYERS</span>
       </button>
@@ -161,10 +161,12 @@
   </div>
 
   <!-- ═══════════════════════════════════════
-       JOIN MODAL (for the 2 friends)
+       JOIN ROOM MODAL (Client)
   ═══════════════════════════════════════ -->
   <div id="joinModal" class="modal-overlay hidden">
     <div class="modal-box modal-small">
+      <button class="modal-x" id="joinClose">✕</button>
+      
       <div class="join-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
@@ -172,13 +174,21 @@
           <line x1="15" y1="12" x2="3" y2="12"/>
         </svg>
       </div>
-      <h2 class="modal-heading">Join Game</h2>
-      <p class="modal-text">Enter the 6-letter code from your friend</p>
       
-      <input type="text" id="joinCodeInput" class="join-input" maxlength="6" placeholder="------" autocomplete="off" spellcheck="false">
+      <h2 class="modal-heading">Join Room</h2>
+      <p class="modal-text">Enter the 4-digit number from your friend</p>
       
-      <button class="start-btn" id="connectBtn">
-        <span>CONNECT</span>
+      <div class="digit-inputs" id="digitInputs">
+        <input type="tel" class="digit-input" maxlength="1" inputmode="numeric" pattern="[0-9]">
+        <input type="tel" class="digit-input" maxlength="1" inputmode="numeric" pattern="[0-9]">
+        <input type="tel" class="digit-input" maxlength="1" inputmode="numeric" pattern="[0-9]">
+        <input type="tel" class="digit-input" maxlength="1" inputmode="numeric" pattern="[0-9]">
+      </div>
+      
+      <input type="hidden" id="joinCodeInput">
+      
+      <button class="start-btn" id="connectBtn" disabled>
+        <span id="connectBtnText">ENTER 4 DIGITS</span>
       </button>
     </div>
   </div>
@@ -200,7 +210,6 @@
   ═══════════════════════════════════════ -->
   <div id="gameScreen" class="game-screen hidden">
     
-    <!-- Top bar -->
     <div class="game-topbar">
       <button class="top-btn" id="backBtn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -226,7 +235,6 @@
       </button>
     </div>
 
-    <!-- Players -->
     <div class="players-row" id="playersRow">
       <div class="player-chip p1-chip active" data-p="0">
         <span class="pc-dot" style="background:#e63946"></span>
@@ -251,14 +259,12 @@
       </div>
     </div>
 
-    <!-- Board -->
     <div class="board-wrap">
       <div class="board-frame" id="boardFrame">
         <canvas id="gameCanvas" width="700" height="700"></canvas>
       </div>
     </div>
 
-    <!-- Power -->
     <div class="power-row" id="powerRow">
       <span class="power-label">POWER</span>
       <div class="power-track">
@@ -266,13 +272,11 @@
       </div>
     </div>
 
-    <!-- Turn -->
     <div class="turn-row">
       <span class="turn-swatch" id="turnSwatch"></span>
       <span class="turn-label" id="turnLabel">Your turn</span>
     </div>
 
-    <!-- Reactions -->
     <div class="reactions-row">
       <button class="reaction" data-emoji="👏">👏</button>
       <button class="reaction" data-emoji="🔥">🔥</button>
@@ -280,7 +284,6 @@
       <button class="reaction" data-emoji="🎯">🎯</button>
     </div>
 
-    <!-- Game over -->
     <div id="gameOverOverlay" class="gameover hidden">
       <div class="go-box">
         <div class="go-icon" id="goIcon">🏆</div>
@@ -297,10 +300,7 @@
     </div>
   </div>
 
-  <!-- Toasts -->
   <div id="toastContainer" class="toast-container"></div>
-  
-  <!-- Emoji layer -->
   <div id="emojiLayer" class="emoji-layer"></div>
 
   <script src="script.js"></script>
