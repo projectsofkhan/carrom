@@ -1,68 +1,68 @@
 /* ═══════════════════════════════════════════════════════════
    CARROM 3P FREESTYLE • MAIN SCRIPT
-   Peer-to-peer multiplayer using PeerJS
-   Sound via Howler.js
+   Host is always Player 1 and always ready.
+   Host invites exactly 2 friends via room code / link.
 ═══════════════════════════════════════════════════════════ */
 
 /* ─────────────────────────────────────────────
    GLOBAL STATE
 ───────────────────────────────────────────── */
 const GAME = {
-  mode: 'menu', // menu, host, join, practice, playing
+  mode: 'menu',
   myPlayerIndex: 0,
-  playerCount: 1,
   currentTurn: 0,
   isHost: false,
   isPractice: false,
   roomCode: null,
   players: [
-    { id: null, name: 'YOU', connected: false, score: 0 },
-    { id: null, name: 'WAITING', connected: false, score: 0 },
-    { id: null, name: 'WAITING', connected: false, score: 0 }
+    { id: 'me', name: 'YOU', connected: true, score: 0 },
+    { id: null, name: 'PLAYER 2', connected: false, score: 0 },
+    { id: null, name: 'PLAYER 3', connected: false, score: 0 }
   ],
   audioEnabled: true,
   soundVolume: 0.6
 };
 
 const PLAYER_COLORS = ['#e63946', '#2a9d8f', '#9c6ade'];
-const PLAYER_NAMES = ['Player 1', 'Player 2', 'Player 3'];
 
 /* ─────────────────────────────────────────────
-   AUDIO MANAGER (Howler)
+   AUDIO MANAGER (Web Audio synthesis)
 ───────────────────────────────────────────── */
 const AudioManager = {
-  sounds: {},
-  initialized: false,
+  _ctx: null,
 
   init() {
-    if (this.initialized) return;
-    
-    // Generate sounds via Web Audio API (no external files needed)
-    // Using Howler with synthesized audio buffers would require base64,
-    // so we use a hybrid: Howler for control + Web Audio for synthesis
-    
-    this.initialized = true;
-    console.log('🎵 Audio manager initialized');
+    if (!this._ctx) {
+      try {
+        this._ctx = new (window.AudioContext || window.webkitAudioContext)();
+      } catch(e) {}
+    }
+    if (this._ctx && this._ctx.state === 'suspended') this._ctx.resume();
   },
 
   play(type, options = {}) {
     if (!GAME.audioEnabled) return;
     const { pan = 0, volume = 1 } = options;
-    this.synthesize(type, pan, volume);
+    this.synth(type, pan, volume);
   },
 
-  synthesize(type, pan, volume) {
+  synth(type, pan, volume) {
+    if (!this._ctx) return;
     try {
-      const ctx = this.getContext();
+      const ctx = this._ctx;
       const now = ctx.currentTime;
       const master = ctx.createGain();
-      const panner = ctx.createStereoPanner();
-      
-      panner.pan.value = Math.max(-1, Math.min(1, pan));
+      const panner = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+
       master.gain.value = GAME.soundVolume * volume;
-      
-      master.connect(panner);
-      panner.connect(ctx.destination);
+
+      if (panner) {
+        panner.pan.value = Math.max(-1, Math.min(1, pan));
+        master.connect(panner);
+        panner.connect(ctx.destination);
+      } else {
+        master.connect(ctx.destination);
+      }
 
       switch(type) {
         case 'hit_soft':
@@ -89,9 +89,6 @@ const AudioManager = {
         case 'win':
           this.melody(ctx, master, [523, 659, 784, 1047], 0.15, 0.4);
           break;
-        case 'lose':
-          this.melody(ctx, master, [400, 350, 280, 200], 0.15, 0.3);
-          break;
         case 'click':
           this.tone(ctx, master, 800, 400, 'sine', 0.04, 0.15);
           break;
@@ -105,52 +102,36 @@ const AudioManager = {
           this.melody(ctx, master, [440, 587], 0.08, 0.25);
           break;
       }
-    } catch(e) {
-      // Silently fail
-    }
+    } catch(e) {}
   },
 
-  getContext() {
-    if (!this._ctx) {
-      this._ctx = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    if (this._ctx.state === 'suspended') this._ctx.resume();
-    return this._ctx;
-  },
-
-  tone(ctx, dest, freqStart, freqEnd, wave, duration, gainVal) {
+  tone(ctx, dest, f1, f2, wave, dur, gainVal) {
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    
     osc.type = wave;
-    osc.frequency.setValueAtTime(freqStart, now);
-    osc.frequency.exponentialRampToValueAtTime(Math.max(freqEnd, 1), now + duration);
-    
+    osc.frequency.setValueAtTime(f1, now);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(f2, 1), now + dur);
     gain.gain.setValueAtTime(0.0001, now);
     gain.gain.exponentialRampToValueAtTime(gainVal, now + 0.005);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-    
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
     osc.connect(gain);
     gain.connect(dest);
-    
     osc.start(now);
-    osc.stop(now + duration + 0.02);
+    osc.stop(now + dur + 0.02);
   },
 
-  noise(ctx, dest, duration, gainVal) {
+  noise(ctx, dest, dur, gainVal) {
     const now = ctx.currentTime;
-    const bufferSize = ctx.sampleRate * duration;
-    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const size = ctx.sampleRate * dur;
+    const buffer = ctx.createBuffer(1, size, ctx.sampleRate);
     const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
-    }
+    for (let i = 0; i < size; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / size);
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(gainVal, now);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
     src.connect(gain);
     gain.connect(dest);
     src.start(now);
@@ -158,7 +139,7 @@ const AudioManager = {
 
   melody(ctx, dest, notes, noteDur, gainVal) {
     let t = ctx.currentTime;
-    notes.forEach((freq, i) => {
+    notes.forEach(freq => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
@@ -176,11 +157,13 @@ const AudioManager = {
 };
 
 /* ─────────────────────────────────────────────
-   P2P NETWORK MANAGER (PeerJS)
+   NETWORK (PeerJS)
+   Room code maps to peer ID: carrom3p-XXXXXX
+   Host uses that ID. Joiners connect to it.
 ───────────────────────────────────────────── */
 const Network = {
   peer: null,
-  connections: [], // Array of DataConnections
+  connections: [],
   isHost: false,
   roomCode: null,
   onPlayerJoin: null,
@@ -188,118 +171,118 @@ const Network = {
   onData: null,
   onError: null,
 
-  generateRoomCode() {
+  generateCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let code = '';
-    for (let i = 0; i < 6; i++) {
-      code += chars[Math.floor(Math.random() * chars.length)];
-    }
-    return code;
+    let c = '';
+    for (let i = 0; i < 6; i++) c += chars[Math.floor(Math.random() * chars.length)];
+    return c;
   },
 
-  initHost(callbacks) {
+  initHost(cb) {
     this.isHost = true;
-    this.roomCode = this.generateRoomCode();
-    this.onPlayerJoin = callbacks.onPlayerJoin;
-    this.onPlayerLeave = callbacks.onPlayerLeave;
-    this.onData = callbacks.onData;
-    this.onError = callbacks.onError;
-    
-    // Use a deterministic ID with prefix so joiners can find us
+    this.roomCode = this.generateCode();
+    this.onPlayerJoin = cb.onPlayerJoin;
+    this.onPlayerLeave = cb.onPlayerLeave;
+    this.onData = cb.onData;
+    this.onError = cb.onError;
+
     const peerId = 'carrom3p-' + this.roomCode;
-    
+
     return new Promise((resolve, reject) => {
-      this.peer = new Peer(peerId, {
-        debug: 1,
-        config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:global.stun.twilio.com:3478' }
-          ]
-        }
-      });
+      try {
+        this.peer = new Peer(peerId, {
+          debug: 1,
+          config: {
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:global.stun.twilio.com:3478' }
+            ]
+          }
+        });
 
-      this.peer.on('open', (id) => {
-        console.log('✅ Host ready, room:', this.roomCode);
-        AudioManager.play('connect');
-        resolve(this.roomCode);
-      });
+        this.peer.on('open', id => {
+          console.log('Host ready:', this.roomCode);
+          AudioManager.play('connect');
+          resolve(this.roomCode);
+        });
 
-      this.peer.on('connection', (conn) => {
-        console.log('👤 Incoming connection:', conn.peer);
-        this.setupConnection(conn);
-      });
+        this.peer.on('connection', conn => {
+          this.setupConnection(conn);
+        });
 
-      this.peer.on('error', (err) => {
-        console.error('❌ Peer error:', err);
-        if (this.onError) this.onError(err);
-        reject(err);
-      });
-
-      this.peer.on('disconnected', () => {
-        console.warn('⚠️ Peer disconnected');
-      });
+        this.peer.on('error', err => {
+          console.error('Host error:', err);
+          if (this.onError) this.onError(err);
+          reject(err);
+        });
+      } catch(e) {
+        reject(e);
+      }
     });
   },
 
-  initClient(roomCode, callbacks) {
+  initClient(roomCode, cb) {
     this.isHost = false;
     this.roomCode = roomCode;
-    this.onData = callbacks.onData;
-    this.onError = callbacks.onError;
-    this.onPlayerJoin = callbacks.onPlayerJoin;
-    this.onPlayerLeave = callbacks.onPlayerLeave;
+    this.onData = cb.onData;
+    this.onError = cb.onError;
+    this.onPlayerJoin = cb.onPlayerJoin;
+    this.onPlayerLeave = cb.onPlayerLeave;
 
     const hostPeerId = 'carrom3p-' + roomCode.toUpperCase();
-    
+
     return new Promise((resolve, reject) => {
-      this.peer = new Peer({
-        debug: 1,
-        config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:global.stun.twilio.com:3478' }
-          ]
-        }
-      });
+      try {
+        this.peer = new Peer({
+          debug: 1,
+          config: {
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+          }
+        });
 
-      this.peer.on('open', () => {
-        console.log('🔌 Client ready, connecting to:', hostPeerId);
-        const conn = this.peer.connect(hostPeerId, { reliable: true });
-        this.setupConnection(conn);
-      });
+        this.peer.on('open', () => {
+          console.log('Client ready, connecting to:', hostPeerId);
+          const conn = this.peer.connect(hostPeerId, { reliable: true });
+          this.setupConnection(conn);
+          resolve(conn);
+        });
 
-      this.peer.on('error', (err) => {
-        console.error('❌ Client error:', err);
-        if (this.onError) this.onError(err);
-        reject(err);
-      });
+        this.peer.on('error', err => {
+          console.error('Client error:', err);
+          if (this.onError) this.onError(err);
+          reject(err);
+        });
+      } catch(e) {
+        reject(e);
+      }
     });
   },
 
   setupConnection(conn) {
     conn.on('open', () => {
-      console.log('✅ Connection open:', conn.peer);
-      this.connections.push(conn);
-      AudioManager.play('connect');
-      if (this.onPlayerJoin) {
-        this.onPlayerJoin(conn, this.connections.length);
+      console.log('Connection open:', conn.peer);
+      if (!this.connections.includes(conn)) {
+        this.connections.push(conn);
       }
+      AudioManager.play('connect');
+      if (this.onPlayerJoin) this.onPlayerJoin(conn, this.connections.length);
     });
 
-    conn.on('data', (data) => {
+    conn.on('data', data => {
       if (this.onData) this.onData(data, conn);
     });
 
     conn.on('close', () => {
-      console.log('🔌 Connection closed:', conn.peer);
+      console.log('Connection closed:', conn.peer);
       this.connections = this.connections.filter(c => c !== conn);
       if (this.onPlayerLeave) this.onPlayerLeave(conn);
     });
 
-    conn.on('error', (err) => {
+    conn.on('error', err => {
       console.error('Connection error:', err);
     });
   },
@@ -307,14 +290,14 @@ const Network = {
   broadcast(data) {
     this.connections.forEach(conn => {
       if (conn.open) {
-        try { conn.send(data); } catch(e) { console.error('Send error:', e); }
+        try { conn.send(data); } catch(e) {}
       }
     });
   },
 
   sendTo(conn, data) {
     if (conn && conn.open) {
-      try { conn.send(data); } catch(e) { console.error('Send error:', e); }
+      try { conn.send(data); } catch(e) {}
     }
   },
 
@@ -328,7 +311,7 @@ const Network = {
 };
 
 /* ─────────────────────────────────────────────
-   PHYSICS ENGINE (Carrom)
+   PHYSICS (Carrom simulation)
 ───────────────────────────────────────────── */
 const Physics = {
   W: 700, H: 700,
@@ -340,84 +323,59 @@ const Physics = {
   WALL_BOUNCE: 0.72,
   MIN_SPEED: 0.1,
   MAX_POWER: 12,
-  
+
   pockets: [],
   pucks: [],
   striker: null,
   particles: [],
-  trails: [],
 
   init() {
+    const p = this.BOARD_PADDING;
     this.pockets = [
-      { x: this.BOARD_PADDING, y: this.BOARD_PADDING },
-      { x: this.W - this.BOARD_PADDING, y: this.BOARD_PADDING },
-      { x: this.BOARD_PADDING, y: this.H - this.BOARD_PADDING },
-      { x: this.W - this.BOARD_PADDING, y: this.H - this.BOARD_PADDING }
+      { x: p, y: p },
+      { x: this.W - p, y: p },
+      { x: p, y: this.H - p },
+      { x: this.W - p, y: this.H - p }
     ];
   },
 
-  getBoardBounds() {
+  bounds() {
     const p = this.BOARD_PADDING;
-    return {
-      left: p,
-      right: this.W - p,
-      top: p,
-      bottom: this.H - p
-    };
+    return { left: p, right: this.W - p, top: p, bottom: this.H - p };
   },
 
   createPucks() {
     const pucks = [];
     const cx = this.W / 2;
     const cy = this.H / 2;
-    
-    // 9 white outer ring
+
     for (let i = 0; i < 9; i++) {
-      const angle = (i / 9) * Math.PI * 2 - Math.PI / 2;
+      const a = (i / 9) * Math.PI * 2 - Math.PI / 2;
       pucks.push({
-        id: 'w' + i,
-        x: cx + Math.cos(angle) * 62,
-        y: cy + Math.sin(angle) * 62,
-        vx: 0, vy: 0,
-        radius: this.PUCK_RADIUS,
-        color: '#f5ede0',
-        rimColor: '#d4c4a8',
-        type: 'white',
-        active: true,
-        trail: []
+        x: cx + Math.cos(a) * 62, y: cy + Math.sin(a) * 62,
+        vx: 0, vy: 0, radius: this.PUCK_RADIUS,
+        color: '#f5ede0', rimColor: '#d4c4a8',
+        type: 'white', active: true, trail: []
       });
     }
-    
-    // 9 black inner ring
+
     for (let i = 0; i < 9; i++) {
-      const angle = (i / 9) * Math.PI * 2 + 0.35;
+      const a = (i / 9) * Math.PI * 2 + 0.35;
       pucks.push({
-        id: 'b' + i,
-        x: cx + Math.cos(angle) * 32,
-        y: cy + Math.sin(angle) * 32,
-        vx: 0, vy: 0,
-        radius: this.PUCK_RADIUS,
-        color: '#1e1e1e',
-        rimColor: '#000000',
-        type: 'black',
-        active: true,
-        trail: []
+        x: cx + Math.cos(a) * 32, y: cy + Math.sin(a) * 32,
+        vx: 0, vy: 0, radius: this.PUCK_RADIUS,
+        color: '#1e1e1e', rimColor: '#000000',
+        type: 'black', active: true, trail: []
       });
     }
-    
-    // 1 center extra
+
     pucks.push({
-      id: 'c0',
-      x: cx, y: cy,
-      vx: 0, vy: 0,
+      x: cx, y: cy, vx: 0, vy: 0,
       radius: this.PUCK_RADIUS,
-      color: '#f5ede0',
-      rimColor: '#d4c4a8',
-      type: 'white',
-      active: true,
-      trail: []
+      color: '#f5ede0', rimColor: '#d4c4a8',
+      type: 'white', active: true, trail: []
     });
-    
+
     return pucks;
   },
 
@@ -429,13 +387,10 @@ const Physics = {
     ];
     const b = bases[playerIndex];
     return {
-      x: b.x, y: b.y,
-      vx: 0, vy: 0,
+      x: b.x, y: b.y, vx: 0, vy: 0,
       radius: this.STRIKER_RADIUS,
       color: PLAYER_COLORS[playerIndex],
-      type: 'striker',
-      active: true,
-      trail: []
+      type: 'striker', active: true, trail: []
     };
   },
 
@@ -444,39 +399,38 @@ const Physics = {
     const dy = b.y - a.y;
     const dist = Math.hypot(dx, dy);
     const minDist = a.radius + b.radius;
-    
+
     if (dist < minDist && dist > 0.01) {
       const overlap = (minDist - dist) / 2;
       const nx = dx / dist;
       const ny = dy / dist;
-      
+
       a.x -= nx * overlap;
       a.y -= ny * overlap;
       b.x += nx * overlap;
       b.y += ny * overlap;
-      
+
       const dvx = b.vx - a.vx;
       const dvy = b.vy - a.vy;
       const vn = dvx * nx + dvy * ny;
-      
+
       if (vn > 0) return;
-      
+
       const e = 0.88;
       const j = -(1 + e) * vn / (1/a.radius + 1/b.radius);
-      const impulseX = j * nx;
-      const impulseY = j * ny;
-      
-      a.vx -= impulseX / a.radius;
-      a.vy -= impulseY / a.radius;
-      b.vx += impulseX / b.radius;
-      b.vy += impulseY / b.radius;
-      
+      const ix = j * nx;
+      const iy = j * ny;
+
+      a.vx -= ix / a.radius;
+      a.vy -= iy / a.radius;
+      b.vx += ix / b.radius;
+      b.vy += iy / b.radius;
+
       const speed = Math.abs(vn);
       if (speed > 0.5 && onHit) {
         onHit(Math.min(speed / 15, 1), (a.x + b.x) / 2, (a.y + b.y) / 2);
       }
-      
-      // Particles
+
       for (let i = 0; i < 8; i++) {
         const ang = Math.random() * Math.PI * 2;
         const spd = 1 + Math.random() * 4;
@@ -495,22 +449,19 @@ const Physics = {
   },
 
   step(onCollision, onPocket, onWall) {
-    const b = this.getBoardBounds();
-    
-    // Update striker
+    const b = this.bounds();
+
     if (this.striker && this.striker.active) {
       this.stepBody(this.striker, b, onWall);
       this.checkPockets(this.striker, onPocket, true);
     }
-    
-    // Update pucks
+
     for (const puck of this.pucks) {
       if (!puck.active) continue;
       this.stepBody(puck, b, onWall);
       this.checkPockets(puck, onPocket, false);
     }
-    
-    // Puck-puck collisions
+
     for (let i = 0; i < this.pucks.length; i++) {
       if (!this.pucks[i].active) continue;
       for (let j = i + 1; j < this.pucks.length; j++) {
@@ -518,16 +469,14 @@ const Physics = {
         this.resolveCollision(this.pucks[i], this.pucks[j], onCollision);
       }
     }
-    
-    // Striker-puck collisions
+
     if (this.striker && this.striker.active) {
       for (const puck of this.pucks) {
         if (!puck.active) continue;
         this.resolveCollision(this.striker, puck, onCollision);
       }
     }
-    
-    // Update particles
+
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const pt = this.particles[i];
       pt.x += pt.vx;
@@ -544,19 +493,17 @@ const Physics = {
     body.y += body.vy;
     body.vx *= this.FRICTION;
     body.vy *= this.FRICTION;
-    
+
     if (Math.hypot(body.vx, body.vy) < this.MIN_SPEED) {
       body.vx = 0;
       body.vy = 0;
     }
-    
-    // Trail
+
     if (Math.hypot(body.vx, body.vy) > 1) {
-      body.trail.push({ x: body.x, y: body.y, life: 1.0 });
+      body.trail.push({ x: body.x, y: body.y });
       if (body.trail.length > 12) body.trail.shift();
     }
-    
-    // Walls
+
     let hitWall = false;
     if (body.x - body.radius < bounds.left) {
       body.x = bounds.left + body.radius;
@@ -578,14 +525,13 @@ const Physics = {
       body.vy *= -this.WALL_BOUNCE;
       hitWall = true;
     }
-    
+
     if (hitWall && onWall) onWall(body);
   },
 
   checkPockets(body, onPocket, isStriker) {
     for (const p of this.pockets) {
-      const dist = Math.hypot(body.x - p.x, body.y - p.y);
-      if (dist < this.POCKET_RADIUS - 4) {
+      if (Math.hypot(body.x - p.x, body.y - p.y) < this.POCKET_RADIUS - 4) {
         body.active = false;
         body.vx = 0;
         body.vy = 0;
@@ -596,7 +542,7 @@ const Physics = {
     return false;
   },
 
-  allPucksStopped() {
+  allStopped() {
     if (this.striker && this.striker.active && Math.hypot(this.striker.vx, this.striker.vy) > 0.05) return false;
     for (const p of this.pucks) {
       if (p.active && Math.hypot(p.vx, p.vy) > 0.05) return false;
@@ -613,10 +559,8 @@ const Physics = {
    RENDERER
 ───────────────────────────────────────────── */
 const Renderer = {
-  canvas: null,
-  ctx: null,
-  W: 700,
-  H: 700,
+  canvas: null, ctx: null,
+  W: 700, H: 700,
   time: 0,
 
   init() {
@@ -629,7 +573,6 @@ const Renderer = {
   draw() {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.W, this.H);
-    
     this.drawBoard();
     this.drawParticles();
     this.drawPucks();
@@ -642,8 +585,7 @@ const Renderer = {
     const p = Physics.BOARD_PADDING;
     const w = this.W - p * 2;
     const h = this.H - p * 2;
-    
-    // Outer frame
+
     ctx.save();
     const outerGrad = ctx.createLinearGradient(0, 0, this.W, this.H);
     outerGrad.addColorStop(0, '#a06838');
@@ -652,8 +594,7 @@ const Renderer = {
     ctx.fillStyle = outerGrad;
     this.roundRect(ctx, 0, 0, this.W, this.H, 40);
     ctx.fill();
-    
-    // Inner playing surface
+
     const boardGrad = ctx.createRadialGradient(
       this.W/2, this.H/2, 50,
       this.W/2, this.H/2, this.W/1.4
@@ -661,109 +602,88 @@ const Renderer = {
     boardGrad.addColorStop(0, '#f7ead4');
     boardGrad.addColorStop(0.7, '#f0e0c4');
     boardGrad.addColorStop(1, '#e8d5b0');
-    
     ctx.fillStyle = boardGrad;
     this.roundRect(ctx, p - 8, p - 8, w + 16, h + 16, 24);
     ctx.fill();
-    
-    // Board pattern - subtle grid
+
     ctx.strokeStyle = 'rgba(180, 150, 100, 0.15)';
     ctx.lineWidth = 1;
     const gridCount = 14;
     for (let i = 0; i <= gridCount; i++) {
       const x = p + (i * w) / gridCount;
       const y = p + (i * h) / gridCount;
-      ctx.beginPath();
-      ctx.moveTo(x, p);
-      ctx.lineTo(x, this.H - p);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(p, y);
-      ctx.lineTo(this.W - p, y);
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x, p); ctx.lineTo(x, this.H - p); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(p, y); ctx.lineTo(this.W - p, y); ctx.stroke();
     }
-    
-    // Border lines
+
     ctx.strokeStyle = '#8a5a2a';
     ctx.lineWidth = 3;
     this.roundRect(ctx, p - 8, p - 8, w + 16, h + 16, 24);
     ctx.stroke();
-    
+
     ctx.strokeStyle = 'rgba(255,255,255,0.4)';
     ctx.lineWidth = 1.5;
     this.roundRect(ctx, p - 4, p - 4, w + 8, h + 8, 20);
     ctx.stroke();
-    
-    // Center circle
+
     ctx.beginPath();
     ctx.arc(this.W/2, this.H/2, 78, 0, Math.PI * 2);
     ctx.strokeStyle = '#b89268';
     ctx.lineWidth = 3.5;
     ctx.stroke();
-    
+
     ctx.beginPath();
     ctx.arc(this.W/2, this.H/2, 68, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(184, 146, 104, 0.4)';
     ctx.lineWidth = 1.5;
     ctx.stroke();
-    
-    // Center design
+
     ctx.beginPath();
     ctx.arc(this.W/2, this.H/2, 12, 0, Math.PI * 2);
     ctx.fillStyle = '#b89268';
     ctx.fill();
-    
+
     ctx.beginPath();
     ctx.arc(this.W/2, this.H/2, 6, 0, Math.PI * 2);
     ctx.fillStyle = '#f7ead4';
     ctx.fill();
-    
-    // Corner arcs
+
     const corners = [
-      { x: p, y: p, start: 0, end: Math.PI/2 },
-      { x: this.W - p, y: p, start: Math.PI/2, end: Math.PI },
-      { x: this.W - p, y: this.H - p, start: Math.PI, end: Math.PI * 1.5 },
-      { x: p, y: this.H - p, start: Math.PI * 1.5, end: Math.PI * 2 }
+      { x: p, y: p, s: 0, e: Math.PI/2 },
+      { x: this.W - p, y: p, s: Math.PI/2, e: Math.PI },
+      { x: this.W - p, y: this.H - p, s: Math.PI, e: Math.PI * 1.5 },
+      { x: p, y: this.H - p, s: Math.PI * 1.5, e: Math.PI * 2 }
     ];
-    
     corners.forEach(c => {
       ctx.beginPath();
-      ctx.arc(c.x, c.y, 70, c.start, c.end);
+      ctx.arc(c.x, c.y, 70, c.s, c.e);
       ctx.strokeStyle = 'rgba(184, 146, 104, 0.35)';
       ctx.lineWidth = 2;
       ctx.stroke();
     });
-    
-    // Pockets
+
     for (const pocket of Physics.pockets) {
-      // Shadow
-      const pg = ctx.createRadialGradient(
-        pocket.x, pocket.y, 2,
-        pocket.x, pocket.y, Physics.POCKET_RADIUS
-      );
+      const pg = ctx.createRadialGradient(pocket.x, pocket.y, 2, pocket.x, pocket.y, Physics.POCKET_RADIUS);
       pg.addColorStop(0, '#000000');
       pg.addColorStop(0.7, '#1a0f08');
       pg.addColorStop(1, '#2a1a0e');
-      
       ctx.beginPath();
       ctx.arc(pocket.x, pocket.y, Physics.POCKET_RADIUS, 0, Math.PI * 2);
       ctx.fillStyle = pg;
       ctx.fill();
-      
-      // Inner shadow
+
       ctx.beginPath();
       ctx.arc(pocket.x, pocket.y, Physics.POCKET_RADIUS - 4, 0, Math.PI * 2);
-      ctx.fillStyle = '#000000';
+      ctx.fillStyle = '#000';
       ctx.fill();
-      
-      // Rim highlight
+
       ctx.beginPath();
       ctx.arc(pocket.x, pocket.y, Physics.POCKET_RADIUS - 1, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(120, 80, 40, 0.6)';
       ctx.lineWidth = 3;
       ctx.stroke();
     }
-    
+
     ctx.restore();
   },
 
@@ -771,10 +691,8 @@ const Renderer = {
     const ctx = this.ctx;
     for (const puck of Physics.pucks) {
       if (!puck.active) continue;
-      
-      // Trail
+
       if (puck.trail && puck.trail.length > 1) {
-        ctx.save();
         for (let i = 0; i < puck.trail.length; i++) {
           const t = puck.trail[i];
           const alpha = (i / puck.trail.length) * 0.25;
@@ -783,10 +701,8 @@ const Renderer = {
           ctx.fillStyle = puck.color + Math.floor(alpha * 255).toString(16).padStart(2, '0');
           ctx.fill();
         }
-        ctx.restore();
       }
-      
-      // Shadow
+
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.35)';
       ctx.shadowBlur = 8;
@@ -796,22 +712,16 @@ const Renderer = {
       ctx.fillStyle = puck.color;
       ctx.fill();
       ctx.restore();
-      
-      // Rim
+
       ctx.beginPath();
       ctx.arc(puck.x, puck.y, puck.radius, 0, Math.PI * 2);
       ctx.strokeStyle = puck.rimColor;
       ctx.lineWidth = 2;
       ctx.stroke();
-      
-      // Highlight
+
       const hg = ctx.createRadialGradient(
-        puck.x - puck.radius * 0.4,
-        puck.y - puck.radius * 0.4,
-        1,
-        puck.x,
-        puck.y,
-        puck.radius
+        puck.x - puck.radius * 0.4, puck.y - puck.radius * 0.4, 1,
+        puck.x, puck.y, puck.radius
       );
       hg.addColorStop(0, 'rgba(255,255,255,0.5)');
       hg.addColorStop(0.5, 'rgba(255,255,255,0.05)');
@@ -820,15 +730,13 @@ const Renderer = {
       ctx.arc(puck.x, puck.y, puck.radius - 1, 0, Math.PI * 2);
       ctx.fillStyle = hg;
       ctx.fill();
-      
-      // Inner ring
+
       ctx.beginPath();
       ctx.arc(puck.x, puck.y, puck.radius * 0.55, 0, Math.PI * 2);
       ctx.strokeStyle = puck.type === 'white' ? 'rgba(180, 150, 100, 0.4)' : 'rgba(255,255,255,0.08)';
       ctx.lineWidth = 1.2;
       ctx.stroke();
-      
-      // Center dot
+
       ctx.beginPath();
       ctx.arc(puck.x, puck.y, 2.5, 0, Math.PI * 2);
       ctx.fillStyle = puck.type === 'white' ? '#d4c4a8' : '#333';
@@ -840,8 +748,7 @@ const Renderer = {
     const s = Physics.striker;
     if (!s || !s.active) return;
     const ctx = this.ctx;
-    
-    // Trail
+
     if (s.trail && s.trail.length > 1) {
       for (let i = 0; i < s.trail.length; i++) {
         const t = s.trail[i];
@@ -852,10 +759,11 @@ const Renderer = {
         ctx.fill();
       }
     }
-    
-    // Glow when active
+
     const isMoving = Math.hypot(s.vx, s.vy) > 0.3;
-    if (!isMoving && GAME.currentTurn === GAME.myPlayerIndex && (GAME.mode === 'playing' || GAME.isPractice)) {
+    const isMyTurn = GAME.isPractice || GAME.currentTurn === GAME.myPlayerIndex;
+
+    if (!isMoving && isMyTurn && GAME.mode !== 'menu') {
       const pulse = 0.5 + Math.sin(this.time * 4) * 0.5;
       ctx.save();
       ctx.shadowColor = s.color;
@@ -867,8 +775,7 @@ const Renderer = {
       ctx.stroke();
       ctx.restore();
     }
-    
-    // Shadow
+
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.4)';
     ctx.shadowBlur = 10;
@@ -878,15 +785,10 @@ const Renderer = {
     ctx.fillStyle = s.color;
     ctx.fill();
     ctx.restore();
-    
-    // Highlight
+
     const hg = ctx.createRadialGradient(
-      s.x - s.radius * 0.4,
-      s.y - s.radius * 0.4,
-      1,
-      s.x,
-      s.y,
-      s.radius
+      s.x - s.radius * 0.4, s.y - s.radius * 0.4, 1,
+      s.x, s.y, s.radius
     );
     hg.addColorStop(0, 'rgba(255,255,255,0.7)');
     hg.addColorStop(0.4, 'rgba(255,255,255,0.15)');
@@ -895,15 +797,13 @@ const Renderer = {
     ctx.arc(s.x, s.y, s.radius - 1, 0, Math.PI * 2);
     ctx.fillStyle = hg;
     ctx.fill();
-    
-    // Ring
+
     ctx.beginPath();
     ctx.arc(s.x, s.y, s.radius * 0.7, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(255,255,255,0.6)';
     ctx.lineWidth = 2;
     ctx.stroke();
-    
-    // Center dot
+
     ctx.beginPath();
     ctx.arc(s.x, s.y, 3, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,0.9)';
@@ -912,35 +812,31 @@ const Renderer = {
 
   drawAim() {
     if (!Input.isDragging) return;
-    if (GAME.currentTurn !== GAME.myPlayerIndex && !GAME.isPractice) return;
-    
+    if (!GAME.isPractice && GAME.currentTurn !== GAME.myPlayerIndex) return;
+
     const s = Physics.striker;
     if (!s || !s.active) return;
     if (Math.hypot(s.vx, s.vy) > 0.5) return;
-    
+
     const ctx = this.ctx;
     const start = Input.dragStart;
     const current = Input.dragCurrent;
-    
     const dx = current.x - start.x;
     const dy = current.y - start.y;
     const dist = Math.hypot(dx, dy);
-    
+
     if (dist < 15) return;
-    
+
     const power = Math.min(dist / 80, 1);
     const angle = Math.atan2(-dy, -dx);
-    
-    // Aim line
     const lineLen = 100 + power * 180;
     const endX = s.x + Math.cos(angle) * lineLen;
     const endY = s.y + Math.sin(angle) * lineLen;
-    
-    // Gradient line
+
     const lg = ctx.createLinearGradient(s.x, s.y, endX, endY);
     lg.addColorStop(0, `rgba(245, 197, 66, ${0.3 + power * 0.5})`);
     lg.addColorStop(1, `rgba(245, 197, 66, 0)`);
-    
+
     ctx.save();
     ctx.setLineDash([10, 12]);
     ctx.lineDashOffset = -this.time * 30;
@@ -952,8 +848,7 @@ const Renderer = {
     ctx.lineCap = 'round';
     ctx.stroke();
     ctx.restore();
-    
-    // Power indicator circle
+
     ctx.save();
     ctx.beginPath();
     ctx.arc(endX, endY, 8 + power * 14, 0, Math.PI * 2);
@@ -963,8 +858,7 @@ const Renderer = {
     ctx.lineWidth = 3;
     ctx.stroke();
     ctx.restore();
-    
-    // Direction arrow head
+
     const arrowSize = 14;
     ctx.save();
     ctx.translate(endX, endY);
@@ -1009,7 +903,7 @@ const Renderer = {
 };
 
 /* ─────────────────────────────────────────────
-   INPUT HANDLER
+   INPUT
 ───────────────────────────────────────────── */
 const Input = {
   isDragging: false,
@@ -1019,56 +913,46 @@ const Input = {
 
   init(canvas) {
     this.canvas = canvas;
-    
-    canvas.addEventListener('mousedown', this.onDown.bind(this));
-    canvas.addEventListener('mousemove', this.onMove.bind(this));
-    canvas.addEventListener('mouseup', this.onUp.bind(this));
-    canvas.addEventListener('mouseleave', this.onUp.bind(this));
-    
-    canvas.addEventListener('touchstart', this.onDown.bind(this), { passive: false });
-    canvas.addEventListener('touchmove', this.onMove.bind(this), { passive: false });
-    canvas.addEventListener('touchend', this.onUp.bind(this), { passive: false });
-    canvas.addEventListener('touchcancel', this.onUp.bind(this), { passive: false });
+    canvas.addEventListener('mousedown', this.down.bind(this));
+    canvas.addEventListener('mousemove', this.move.bind(this));
+    canvas.addEventListener('mouseup', this.up.bind(this));
+    canvas.addEventListener('mouseleave', this.up.bind(this));
+    canvas.addEventListener('touchstart', this.down.bind(this), { passive: false });
+    canvas.addEventListener('touchmove', this.move.bind(this), { passive: false });
+    canvas.addEventListener('touchend', this.up.bind(this), { passive: false });
+    canvas.addEventListener('touchcancel', this.up.bind(this), { passive: false });
   },
 
-  getCoords(e) {
+  coords(e) {
     const rect = this.canvas.getBoundingClientRect();
-    const scaleX = this.canvas.width / rect.width;
-    const scaleY = this.canvas.height / rect.height;
-    let clientX, clientY;
-    
+    const sx = this.canvas.width / rect.width;
+    const sy = this.canvas.height / rect.height;
+    let cx, cy;
     if (e.touches && e.touches.length) {
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
+      cx = e.touches[0].clientX;
+      cy = e.touches[0].clientY;
     } else if (e.changedTouches && e.changedTouches.length) {
-      clientX = e.changedTouches[0].clientX;
-      clientY = e.changedTouches[0].clientY;
+      cx = e.changedTouches[0].clientX;
+      cy = e.changedTouches[0].clientY;
     } else {
-      clientX = e.clientX;
-      clientY = e.clientY;
+      cx = e.clientX;
+      cy = e.clientY;
     }
-    
-    return {
-      x: (clientX - rect.left) * scaleX,
-      y: (clientY - rect.top) * scaleY
-    };
+    return { x: (cx - rect.left) * sx, y: (cy - rect.top) * sy };
   },
 
-  onDown(e) {
+  down(e) {
     e.preventDefault();
     AudioManager.init();
-    
     if (GAME.mode !== 'playing' && !GAME.isPractice) return;
-    if (GAME.currentTurn !== GAME.myPlayerIndex && !GAME.isPractice) return;
-    
+    if (!GAME.isPractice && GAME.currentTurn !== GAME.myPlayerIndex) return;
+
     const s = Physics.striker;
     if (!s || !s.active) return;
     if (Math.hypot(s.vx, s.vy) > 0.5) return;
-    
-    const pos = this.getCoords(e);
-    const dist = Math.hypot(pos.x - s.x, pos.y - s.y);
-    
-    if (dist < 100) {
+
+    const pos = this.coords(e);
+    if (Math.hypot(pos.x - s.x, pos.y - s.y) < 100) {
       this.isDragging = true;
       this.dragStart = { x: s.x, y: s.y };
       this.dragCurrent = { x: pos.x, y: pos.y };
@@ -1076,59 +960,45 @@ const Input = {
     }
   },
 
-  onMove(e) {
+  move(e) {
     if (!this.isDragging) return;
     e.preventDefault();
-    const pos = this.getCoords(e);
+    const pos = this.coords(e);
     this.dragCurrent = { x: pos.x, y: pos.y };
-    
     const dx = pos.x - this.dragStart.x;
     const dy = pos.y - this.dragStart.y;
     const dist = Math.hypot(dx, dy);
-    const power = Math.min(dist / 80, 1);
-    
-    Game.updatePowerMeter(power);
+    Game.updatePower(Math.min(dist / 80, 1));
   },
 
-  onUp(e) {
+  up(e) {
     if (!this.isDragging) return;
     e.preventDefault();
-    
+
     const s = Physics.striker;
-    if (!s || !s.active) {
-      this.reset();
-      return;
-    }
-    
-    const pos = this.getCoords(e);
+    if (!s || !s.active) { this.reset(); return; }
+
+    const pos = this.coords(e);
     const dx = pos.x - this.dragStart.x;
     const dy = pos.y - this.dragStart.y;
     const dist = Math.hypot(dx, dy);
-    
+
     if (dist > 20) {
       const power = Math.min(dist / 80, 1) * Physics.MAX_POWER;
       const angle = Math.atan2(-dy, -dx);
-      
       s.vx = Math.cos(angle) * power;
       s.vy = Math.sin(angle) * power;
-      
       AudioManager.play('shot');
-      
-      // Broadcast shot if multiplayer
+
       if (GAME.mode === 'playing' && !GAME.isPractice) {
         Network.broadcast({
           type: 'shot',
           player: GAME.myPlayerIndex,
-          vx: s.vx,
-          vy: s.vy,
-          x: s.x,
-          y: s.y
+          vx: s.vx, vy: s.vy, x: s.x, y: s.y
         });
       }
-      
-      Game.startTurnResolution();
+      Game.isResolving = true;
     }
-    
     this.reset();
   },
 
@@ -1136,7 +1006,7 @@ const Input = {
     this.isDragging = false;
     this.dragStart = null;
     this.dragCurrent = null;
-    Game.updatePowerMeter(0);
+    Game.updatePower(0);
   }
 };
 
@@ -1145,7 +1015,7 @@ const Input = {
 ───────────────────────────────────────────── */
 const Game = {
   isResolving: false,
-  gameLoopId: null,
+  loopId: null,
   lastTime: 0,
 
   start() {
@@ -1154,6 +1024,7 @@ const Game = {
     Physics.init();
     Physics.pucks = Physics.createPucks();
     Physics.striker = Physics.createStriker(GAME.currentTurn);
+    Physics.particles = [];
     this.loop(performance.now());
   },
 
@@ -1161,140 +1032,96 @@ const Game = {
     const dt = Math.min((t - this.lastTime) / 1000, 0.05);
     this.lastTime = t;
     Renderer.time += dt;
-    
+
     Physics.step(
       (intensity, x, y) => {
-        // Collision sound
         const pan = (x / Physics.W) * 2 - 1;
-        if (intensity > 0.4) {
-          AudioManager.play('hit_hard', { pan, volume: Math.min(intensity, 1) });
-        } else {
-          AudioManager.play('hit_soft', { pan, volume: Math.min(intensity + 0.2, 0.7) });
-        }
+        if (intensity > 0.4) AudioManager.play('hit_hard', { pan, volume: Math.min(intensity, 1) });
+        else AudioManager.play('hit_soft', { pan, volume: Math.min(intensity + 0.2, 0.7) });
       },
       (body, pocket, isStriker) => {
-        // Pocket sound
         const pan = (body.x / Physics.W) * 2 - 1;
         if (isStriker) {
           AudioManager.play('striker_pocket', { pan });
           Toast.show('Foul! Striker pocketed', 'error', '⚠️');
         } else {
           AudioManager.play('pocket', { pan });
-          // Add to current player's score
           if (GAME.mode === 'playing' || GAME.isPractice) {
             GAME.players[GAME.currentTurn].score++;
-            this.updateScoreboard();
+            this.updateScores();
           }
         }
       },
-      (body) => {
-        // Wall sound
+      body => {
         const pan = (body.x / Physics.W) * 2 - 1;
         const vol = Math.min(Math.hypot(body.vx, body.vy) / 12, 0.6);
         if (vol > 0.1) AudioManager.play('wall', { pan, volume: vol });
       }
     );
-    
-    // Check if turn is done
-    if (this.isResolving && Physics.allPucksStopped()) {
+
+    if (this.isResolving && Physics.allStopped()) {
       this.isResolving = false;
       this.endTurn();
     }
-    
-    // Check win
+
     if (Physics.activePucksCount() === 0 && !this.isResolving) {
       this.endGame();
     }
-    
-    Renderer.draw();
-    this.gameLoopId = requestAnimationFrame(this.loop.bind(this));
-  },
 
-  startTurnResolution() {
-    this.isResolving = true;
+    Renderer.draw();
+    this.loopId = requestAnimationFrame(this.loop.bind(this));
   },
 
   endTurn() {
-    // Check for foul (striker pocketed)
-    const strikerPocketed = !Physics.striker || !Physics.striker.active;
-    
-    if (!strikerPocketed) {
-      // No foul, switch player
-      this.switchPlayer();
-    } else {
-      // Foul: switch player and re-spawn striker
-      Toast.show('Foul! Turn passes', 'error', '⚠️');
-      this.switchPlayer();
-    }
-    
-    // Reset striker for next player
+    const foul = !Physics.striker || !Physics.striker.active;
+    if (foul) Toast.show('Foul! Turn passes', 'error', '⚠️');
+
+    GAME.currentTurn = (GAME.currentTurn + 1) % 3;
     Physics.striker = Physics.createStriker(GAME.currentTurn);
-    
-    // Sync in multiplayer
+
     if (GAME.mode === 'playing' && !GAME.isPractice && GAME.isHost) {
-      Network.broadcast({
-        type: 'turn_change',
-        currentTurn: GAME.currentTurn
-      });
+      Network.broadcast({ type: 'turn_change', currentTurn: GAME.currentTurn });
     }
-    
+
     this.updateTurnUI();
     AudioManager.play('turn');
   },
 
-  switchPlayer() {
-    GAME.currentTurn = (GAME.currentTurn + 1) % 3;
-    // Skip disconnected players
-    let attempts = 0;
-    while (!GAME.players[GAME.currentTurn].connected && attempts < 3) {
-      GAME.currentTurn = (GAME.currentTurn + 1) % 3;
-      attempts++;
-    }
-  },
-
   endGame() {
-    if (this.gameLoopId) {
-      // Keep rendering but stop accepting input
-    }
-    
     AudioManager.play('win');
-    this.showConfetti();
-    
-    // Find winner
-    let maxScore = -1;
-    let winner = 0;
+    this.confetti();
+
+    let max = -1, winner = 0;
     GAME.players.forEach((p, i) => {
-      if (p.score > maxScore) {
-        maxScore = p.score;
-        winner = i;
-      }
+      if (p.score > max) { max = p.score; winner = i; }
     });
-    
-    setTimeout(() => this.showGameOver(winner), 800);
+
+    setTimeout(() => this.showGameOver(winner), 700);
   },
 
   showGameOver(winnerIdx) {
     const overlay = document.getElementById('gameOverOverlay');
-    const title = document.getElementById('goTitle');
-    const subtitle = document.getElementById('goSubtitle');
-    const stats = document.getElementById('goStats');
-    
+    const icon = document.getElementById('goIcon');
+    const heading = document.getElementById('goHeading');
+    const text = document.getElementById('goText');
+    const scores = document.getElementById('goScores');
+
     const isMe = winnerIdx === GAME.myPlayerIndex;
-    
-    title.textContent = isMe ? 'VICTORY!' : 'GAME OVER';
-    subtitle.textContent = GAME.players[winnerIdx].name + ' wins the match';
-    
-    stats.innerHTML = GAME.players.map((p, i) => `
-      <div class="go-stat">
-        <div class="go-stat-value" style="color:${PLAYER_COLORS[i]}">${p.score}</div>
-        <div class="go-stat-label">${p.name}</div>
+    icon.textContent = isMe ? '🏆' : '🎯';
+    heading.textContent = isMe ? 'VICTORY!' : 'GAME OVER';
+    text.textContent = GAME.players[winnerIdx].name + ' wins the match';
+
+    scores.innerHTML = GAME.players.map((p, i) => `
+      <div class="go-score" style="animation-delay:${i * 0.1 + 0.1}s">
+        <div class="go-score-val" style="color:${PLAYER_COLORS[i]}">${p.score}</div>
+        <div class="go-score-lbl">${p.name}</div>
       </div>
     `).join('');
-    
+
     overlay.classList.remove('hidden');
   },
 
-  showConfetti() {
+  confetti() {
     const colors = ['#e63946', '#2a9d8f', '#9c6ade', '#f5c542', '#ffffff'];
     for (let i = 0; i < 80; i++) {
       setTimeout(() => {
@@ -1313,47 +1140,37 @@ const Game = {
     }
   },
 
-  updatePowerMeter(power) {
+  updatePower(p) {
     const fill = document.getElementById('powerFill');
-    const wrap = document.getElementById('powerMeterWrap');
-    fill.style.width = (power * 100) + '%';
-    if (power > 0.05) {
-      wrap.classList.add('active');
-    } else {
-      wrap.classList.remove('active');
-    }
+    const row = document.getElementById('powerRow');
+    fill.style.width = (p * 100) + '%';
+    if (p > 0.05) row.classList.add('active');
+    else row.classList.remove('active');
   },
 
   updateTurnUI() {
-    // Scoreboard
-    document.querySelectorAll('.score-card').forEach((card, i) => {
-      card.classList.toggle('active', i === GAME.currentTurn);
+    document.querySelectorAll('.player-chip').forEach((c, i) => {
+      c.classList.toggle('active', i === GAME.currentTurn);
     });
-    
-    // Turn indicator
+
     const swatch = document.getElementById('turnSwatch');
-    const text = document.getElementById('turnText');
+    const label = document.getElementById('turnLabel');
     swatch.style.background = PLAYER_COLORS[GAME.currentTurn];
     swatch.style.color = PLAYER_COLORS[GAME.currentTurn];
-    
-    if (GAME.isPractice) {
-      text.textContent = 'YOUR TURN';
-    } else if (GAME.currentTurn === GAME.myPlayerIndex) {
-      text.textContent = 'YOUR TURN';
-    } else {
-      text.textContent = GAME.players[GAME.currentTurn].name + "'S TURN";
-    }
-    
-    // Board glow
-    const frame = document.querySelector('.board-frame');
-    if (GAME.currentTurn === GAME.myPlayerIndex || GAME.isPractice) {
+
+    if (GAME.isPractice) label.textContent = 'YOUR TURN';
+    else if (GAME.currentTurn === GAME.myPlayerIndex) label.textContent = 'YOUR TURN';
+    else label.textContent = GAME.players[GAME.currentTurn].name + "'S TURN";
+
+    const frame = document.getElementById('boardFrame');
+    if (GAME.isPractice || GAME.currentTurn === GAME.myPlayerIndex) {
       frame.classList.add('active');
     } else {
       frame.classList.remove('active');
     }
   },
 
-  updateScoreboard() {
+  updateScores() {
     GAME.players.forEach((p, i) => {
       const el = document.getElementById('scoreP' + i);
       if (el) el.textContent = p.score;
@@ -1364,81 +1181,66 @@ const Game = {
 };
 
 /* ─────────────────────────────────────────────
-   UI CONTROLLER
+   UI
 ───────────────────────────────────────────── */
 const UI = {
   init() {
-    // Main menu
-    document.getElementById('hostBtn').addEventListener('click', () => this.onHostClick());
-    document.getElementById('joinBtn').addEventListener('click', () => this.onJoinClick());
+    document.getElementById('playBtn').addEventListener('click', () => this.onPlayClick());
     document.getElementById('practiceBtn').addEventListener('click', () => this.onPracticeClick());
-    
-    // Host modal
-    document.getElementById('hostModalClose').addEventListener('click', () => this.closeModal('hostModal'));
-    document.getElementById('copyCodeBtn').addEventListener('click', () => this.copyRoomCode());
-    document.getElementById('startGameBtn').addEventListener('click', () => this.startMultiplayerGame());
-    
-    // Join modal
-    document.getElementById('joinModalClose').addEventListener('click', () => this.closeModal('joinModal'));
-    document.getElementById('connectBtn').addEventListener('click', () => this.connectToRoom());
-    document.getElementById('joinCodeInput').addEventListener('input', (e) => {
+    document.getElementById('inviteClose').addEventListener('click', () => this.closeModal('inviteModal'));
+    document.getElementById('copyCodeBtn').addEventListener('click', () => this.copyCode());
+    document.getElementById('shareLinkBtn').addEventListener('click', () => this.shareLink());
+    document.getElementById('startGameBtn').addEventListener('click', () => this.startGame());
+    document.getElementById('connectBtn').addEventListener('click', () => this.connect());
+    document.getElementById('joinCodeInput').addEventListener('input', e => {
       e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
     });
-    document.getElementById('joinCodeInput').addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') this.connectToRoom();
+    document.getElementById('joinCodeInput').addEventListener('keypress', e => {
+      if (e.key === 'Enter') this.connect();
     });
-    
-    // Game screen
-    document.getElementById('backBtn').addEventListener('click', () => this.confirmQuit());
+    document.getElementById('backBtn').addEventListener('click', () => this.quit());
     document.getElementById('soundToggle').addEventListener('click', () => this.toggleSound());
     document.getElementById('playAgainBtn').addEventListener('click', () => this.playAgain());
-    document.getElementById('goMainMenuBtn').addEventListener('click', () => this.goToMainMenu());
-    
-    // Reactions
-    document.querySelectorAll('.reaction-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const emoji = btn.dataset.emoji;
-        this.sendReaction(emoji);
-      });
+    document.getElementById('goMenuBtn').addEventListener('click', () => this.goMenu());
+
+    document.querySelectorAll('.reaction').forEach(btn => {
+      btn.addEventListener('click', () => this.sendReaction(btn.dataset.emoji));
     });
   },
 
-  async onHostClick() {
+  async onPlayClick() {
     AudioManager.init();
     AudioManager.play('click');
     GAME.mode = 'host';
     GAME.isHost = true;
     GAME.isPractice = false;
     GAME.myPlayerIndex = 0;
-    
-    document.getElementById('hostModal').classList.remove('hidden');
-    document.getElementById('hostRoomCode').textContent = '......';
-    
+
+    // Reset players — YOU are always ready
+    GAME.players = [
+      { id: 'me', name: 'YOU', connected: true, score: 0 },
+      { id: null, name: 'PLAYER 2', connected: false, score: 0 },
+      { id: null, name: 'PLAYER 3', connected: false, score: 0 }
+    ];
+
+    document.getElementById('inviteModal').classList.remove('hidden');
+    document.getElementById('roomCodeDisplay').textContent = '......';
+    this.updateFriendSlots();
+
     try {
       const code = await Network.initHost({
-        onPlayerJoin: (conn, count) => this.onPlayerJoined(conn, count),
-        onPlayerLeave: (conn) => this.onPlayerLeft(conn),
-        onData: (data, conn) => this.onNetworkData(data, conn),
-        onError: (err) => this.onNetworkError(err)
+        onPlayerJoin: (conn, count) => this.onJoin(conn, count),
+        onPlayerLeave: conn => this.onLeave(conn),
+        onData: (data, conn) => this.onData(data, conn),
+        onError: err => this.onNetError(err)
       });
-      
       GAME.roomCode = code;
-      document.getElementById('hostRoomCode').textContent = code;
+      document.getElementById('roomCodeDisplay').textContent = code;
       Toast.show('Room created: ' + code, 'success', '✅');
-    } catch (err) {
+    } catch(err) {
       Toast.show('Failed to create room', 'error', '❌');
-      this.closeModal('hostModal');
+      this.closeModal('inviteModal');
     }
-  },
-
-  onJoinClick() {
-    AudioManager.init();
-    AudioManager.play('click');
-    GAME.mode = 'join';
-    GAME.isHost = false;
-    GAME.isPractice = false;
-    document.getElementById('joinModal').classList.remove('hidden');
-    setTimeout(() => document.getElementById('joinCodeInput').focus(), 300);
   },
 
   onPracticeClick() {
@@ -1448,126 +1250,74 @@ const UI = {
     GAME.isPractice = true;
     GAME.myPlayerIndex = 0;
     GAME.currentTurn = 0;
-    
-    // Setup fake players
+
     GAME.players = [
       { id: 'me', name: 'YOU', connected: true, score: 0 },
-      { id: 'p2', name: 'PLAYER 2', connected: true, score: 0 },
-      { id: 'p3', name: 'PLAYER 3', connected: true, score: 0 }
+      { id: 'p2', name: 'P2', connected: true, score: 0 },
+      { id: 'p3', name: 'P3', connected: true, score: 0 }
     ];
-    GAME.playerCount = 3;
-    
+
     this.enterGame();
   },
 
-  async connectToRoom() {
-    const code = document.getElementById('joinCodeInput').value.trim().toUpperCase();
-    if (code.length !== 6) {
-      Toast.show('Enter 6-character code', 'error', '⚠️');
-      return;
-    }
-    
-    AudioManager.play('click');
-    this.closeModal('joinModal');
-    document.getElementById('connectingOverlay').classList.remove('hidden');
-    document.getElementById('connectingText').textContent = 'Connecting to ' + code + '...';
-    
-    try {
-      await Network.initClient(code, {
-        onPlayerJoin: (conn, count) => this.onPlayerJoined(conn, count),
-        onPlayerLeave: (conn) => this.onPlayerLeft(conn),
-        onData: (data, conn) => this.onNetworkData(data, conn),
-        onError: (err) => this.onNetworkError(err)
-      });
-      
-      // Wait a moment for the connection to open
-      setTimeout(() => {
-        if (Network.connections.length === 0) {
-          document.getElementById('connectingOverlay').classList.add('hidden');
-          Toast.show('Could not connect to room', 'error', '❌');
-          GAME.mode = 'menu';
-        }
-      }, 5000);
-      
-    } catch (err) {
-      document.getElementById('connectingOverlay').classList.add('hidden');
-      Toast.show('Connection failed', 'error', '❌');
-      GAME.mode = 'menu';
-    }
+  onJoin(conn, count) {
+    if (!GAME.isHost) return;
+    const slot = GAME.players.findIndex((p, i) => i > 0 && !p.connected);
+    if (slot < 0) return;
+
+    GAME.players[slot].connected = true;
+    GAME.players[slot].id = conn.peer;
+    GAME.players[slot].name = 'PLAYER ' + (slot + 1);
+
+    // Welcome the new player with their assigned index
+    Network.sendTo(conn, {
+      type: 'welcome',
+      playerIndex: slot,
+      players: GAME.players,
+      roomCode: GAME.roomCode
+    });
+
+    Network.broadcast({ type: 'players_update', players: GAME.players });
+
+    this.updateFriendSlots();
+    Toast.show('Player ' + (slot + 1) + ' joined!', 'success', '🎉');
+    AudioManager.play('notification');
   },
 
-  onPlayerJoined(conn, count) {
-    console.log('Player joined, total connections:', count);
-    
-    if (GAME.isHost) {
-      // Assign next available slot
-      const slot = GAME.players.findIndex((p, i) => i > 0 && !p.connected);
-      if (slot > 0) {
-        GAME.players[slot].connected = true;
-        GAME.players[slot].id = conn.peer;
-        GAME.players[slot].name = 'PLAYER ' + (slot + 1);
-        GAME.playerCount = GAME.players.filter(p => p.connected).length;
-        
-        // Send welcome to the new player
-        Network.sendTo(conn, {
-          type: 'welcome',
-          playerIndex: slot,
-          players: GAME.players,
-          roomCode: GAME.roomCode
-        });
-        
-        // Broadcast updated players to everyone
-        Network.broadcast({
-          type: 'players_update',
-          players: GAME.players
-        });
-        
-        this.updateHostModalPlayers();
-        Toast.show(GAME.players[slot].name + ' joined!', 'success', '🎉');
-        AudioManager.play('notification');
-      }
-    }
-  },
-
-  onPlayerLeft(conn) {
+  onLeave(conn) {
     const idx = GAME.players.findIndex(p => p.id === conn.peer);
     if (idx > 0) {
       GAME.players[idx].connected = false;
       GAME.players[idx].id = null;
-      GAME.players[idx].name = 'WAITING';
-      GAME.playerCount = GAME.players.filter(p => p.connected).length;
-      
-      this.updateHostModalPlayers();
-      this.updateWaitingList();
+      GAME.players[idx].name = 'PLAYER ' + (idx + 1);
+      this.updateFriendSlots();
       Toast.show('A player left', 'info', '👋');
     }
   },
 
-  onNetworkData(data, conn) {
+  onData(data) {
     switch(data.type) {
       case 'welcome':
         GAME.myPlayerIndex = data.playerIndex;
         GAME.players = data.players;
         GAME.roomCode = data.roomCode;
-        GAME.playerCount = 3;
         document.getElementById('connectingOverlay').classList.add('hidden');
         Toast.show('Connected! You are ' + GAME.players[GAME.myPlayerIndex].name, 'success', '🎉');
+        // Enter game when host starts
         break;
-        
+
       case 'players_update':
         GAME.players = data.players;
-        this.updateWaitingList();
         break;
-        
+
       case 'start_game':
         GAME.players = data.players;
         GAME.currentTurn = data.currentTurn;
         this.enterGame();
         break;
-        
+
       case 'shot':
         if (data.player !== GAME.myPlayerIndex) {
-          // Replicate the shot
           Physics.striker.x = data.x;
           Physics.striker.y = data.y;
           Physics.striker.vx = data.vx;
@@ -1575,59 +1325,68 @@ const UI = {
           Game.isResolving = true;
         }
         break;
-        
+
       case 'turn_change':
         GAME.currentTurn = data.currentTurn;
         Physics.striker = Physics.createStriker(GAME.currentTurn);
         Game.updateTurnUI();
         AudioManager.play('turn');
         break;
-        
+
       case 'reaction':
-        this.showReaction(data.emoji, data.player);
+        this.showReaction(data.emoji);
         break;
     }
   },
 
-  onNetworkError(err) {
+  onNetError(err) {
     document.getElementById('connectingOverlay').classList.add('hidden');
     Toast.show('Network error', 'error', '❌');
   },
 
-  updateHostModalPlayers() {
-    const list = document.getElementById('waitingList');
-    const count = GAME.players.filter(p => p.connected).length;
-    document.getElementById('playerCount').textContent = count;
-    
-    list.innerHTML = GAME.players.map((p, i) => {
+  updateFriendSlots() {
+    const slots = document.querySelectorAll('.friend-slot');
+    slots.forEach(slot => {
+      const idx = parseInt(slot.dataset.slot) - 1;
+      const p = GAME.players[idx];
+      const avatar = slot.querySelector('.fs-avatar');
+      const name = slot.querySelector('.fs-name');
+      const tag = slot.querySelector('.fs-tag');
+
       if (p.connected) {
-        return `
-          <div class="waiting-player slot-filled">
-            <div class="wp-color" style="background:${PLAYER_COLORS[i]}"></div>
-            <span>${p.name}${i === 0 ? ' (Host)' : ''}</span>
-            <div class="wp-status ready">READY</div>
-          </div>
-        `;
+        slot.classList.add('connected');
+        avatar.classList.remove('empty');
+        avatar.textContent = (idx + 1);
+        name.textContent = p.name;
+        tag.textContent = '✓ READY';
       } else {
-        return `
-          <div class="waiting-player slot-empty">
-            <div class="wp-color empty"></div>
-            <span>Waiting...</span>
-            <div class="wp-status">—</div>
-          </div>
-        `;
+        slot.classList.remove('connected');
+        avatar.classList.add('empty');
+        avatar.textContent = (idx + 1);
+        name.textContent = 'Waiting...';
+        tag.textContent = 'Not connected';
       }
-    }).join('');
-    
-    document.getElementById('startGameBtn').disabled = count < 3;
+    });
+
+    const count = GAME.players.filter(p => p.connected).length;
+    const btn = document.getElementById('startGameBtn');
+    const btnText = document.getElementById('startBtnText');
+    const hint = document.getElementById('waitingHint');
+
+    if (count === 3) {
+      btn.disabled = false;
+      btnText.textContent = 'START GAME';
+      hint.classList.add('hidden');
+    } else {
+      btn.disabled = true;
+      const need = 3 - count;
+      btnText.textContent = `NEED ${need} MORE PLAYER${need > 1 ? 'S' : ''}`;
+      hint.classList.remove('hidden');
+    }
   },
 
-  updateWaitingList() {
-    this.updateHostModalPlayers();
-  },
-
-  copyRoomCode() {
-    const code = document.getElementById('hostRoomCode').textContent;
+  copyCode() {
+    const code = document.getElementById('roomCodeDisplay').textContent;
     if (code && code !== '......') {
       navigator.clipboard.writeText(code).then(() => {
         Toast.show('Code copied!', 'success', '📋');
@@ -1636,23 +1395,72 @@ const UI = {
     }
   },
 
-  startMultiplayerGame() {
-    const connectedCount = GAME.players.filter(p => p.connected).length;
-    if (connectedCount < 3) {
-      Toast.show('Need 3 players to start', 'error', '⚠️');
+  shareLink() {
+    const code = document.getElementById('roomCodeDisplay').textContent;
+    if (!code || code === '......') return;
+
+    const url = location.origin + location.pathname + '?room=' + code;
+    const text = `Join my Carrom game! Code: ${code}\n${url}`;
+
+    if (navigator.share) {
+      navigator.share({ title: 'Carrom 3P', text: text }).catch(() => {});
+    } else {
+      navigator.clipboard.writeText(text).then(() => {
+        Toast.show('Invite link copied!', 'success', '🔗');
+      });
+    }
+  },
+
+  async connect() {
+    const code = document.getElementById('joinCodeInput').value.trim().toUpperCase();
+    if (code.length !== 6) {
+      Toast.show('Enter 6-character code', 'error', '⚠️');
       return;
     }
-    
+
+    AudioManager.play('click');
+    this.closeModal('joinModal');
+    document.getElementById('connectingOverlay').classList.remove('hidden');
+    document.getElementById('connectingText').textContent = 'Connecting...';
+
+    try {
+      await Network.initClient(code, {
+        onPlayerJoin: (c, n) => this.onJoin(c, n),
+        onPlayerLeave: c => this.onLeave(c),
+        onData: (d, c) => this.onData(d, c),
+        onError: e => this.onNetError(e)
+      });
+
+      setTimeout(() => {
+        if (Network.connections.length === 0) {
+          document.getElementById('connectingOverlay').classList.add('hidden');
+          Toast.show('Could not connect', 'error', '❌');
+          GAME.mode = 'menu';
+        }
+      }, 6000);
+    } catch(e) {
+      document.getElementById('connectingOverlay').classList.add('hidden');
+      Toast.show('Connection failed', 'error', '❌');
+    }
+  },
+
+  startGame() {
+    const count = GAME.players.filter(p => p.connected).length;
+    if (count < 3) {
+      Toast.show('Need 3 players', 'error', '⚠️');
+      return;
+    }
+
     GAME.currentTurn = 0;
     AudioManager.play('click');
-    
+
     Network.broadcast({
       type: 'start_game',
       players: GAME.players,
       currentTurn: 0
     });
-    
-    this.closeModal('hostModal');
+
+    this.closeModal('inviteModal');
     this.enterGame();
   },
 
@@ -1660,19 +1468,15 @@ const UI = {
     document.getElementById('mainMenu').classList.add('hidden');
     document.getElementById('gameScreen').classList.remove('hidden');
     document.getElementById('gameOverOverlay').classList.add('hidden');
-    
+
     GAME.mode = GAME.isPractice ? 'practice' : 'playing';
-    
-    // Reset scores
+
     GAME.players.forEach(p => p.score = 0);
-    
-    // Update UI
-    Game.updateScoreboard();
+    Game.updateScores();
     Game.updateTurnUI();
-    
-    // Start the game
+
     Game.start();
-    
+
     Toast.show(GAME.isPractice ? 'Practice mode' : 'Match started!', 'info', '🎮');
   },
 
@@ -1683,33 +1487,32 @@ const UI = {
     if (GAME.audioEnabled) AudioManager.play('click');
   },
 
-  confirmQuit() {
-    if (confirm('Leave the game?')) {
-      this.goToMainMenu();
-    }
+  quit() {
+    if (!confirm('Leave the game?')) return;
+    this.goMenu();
   },
 
-  goToMainMenu() {
-    // Cleanup
-    if (Game.gameLoopId) cancelAnimationFrame(Game.gameLoopId);
+  goMenu() {
+    if (Game.loopId) cancelAnimationFrame(Game.loopId);
     Network.disconnect();
-    
-    // Reset state
+
     GAME.mode = 'menu';
     GAME.isPractice = false;
     GAME.isHost = false;
     GAME.currentTurn = 0;
     GAME.myPlayerIndex = 0;
     GAME.players = [
-      { id: null, name: 'YOU', connected: false, score: 0 },
-      { id: null, name: 'WAITING', connected: false, score: 0 },
-      { id: null, name: 'WAITING', connected: false, score: 0 }
+      { id: 'me', name: 'YOU', connected: true, score: 0 },
+      { id: null, name: 'PLAYER 2', connected: false, score: 0 },
+      { id: null, name: 'PLAYER 3', connected: false, score: 0 }
     ];
-    
-    // Reset UI
+
     document.getElementById('gameScreen').classList.add('hidden');
     document.getElementById('mainMenu').classList.remove('hidden');
     document.getElementById('gameOverOverlay').classList.add('hidden');
+    document.getElementById('inviteModal').classList.add('hidden');
+    document.getElementById('joinModal').classList.add('hidden');
+
     Physics.pucks = [];
     Physics.striker = null;
     Physics.particles = [];
@@ -1719,14 +1522,11 @@ const UI = {
     document.getElementById('gameOverOverlay').classList.add('hidden');
     GAME.players.forEach(p => p.score = 0);
     GAME.currentTurn = 0;
-    
     Physics.pucks = Physics.createPucks();
     Physics.striker = Physics.createStriker(0);
     Physics.particles = [];
-    
-    Game.updateScoreboard();
+    Game.updateScores();
     Game.updateTurnUI();
-    
     if (GAME.mode === 'playing' && GAME.isHost) {
       Network.broadcast({ type: 'play_again' });
     }
@@ -1734,18 +1534,13 @@ const UI = {
 
   sendReaction(emoji) {
     AudioManager.play('click');
-    this.showReaction(emoji, GAME.myPlayerIndex);
-    
+    this.showReaction(emoji);
     if (GAME.mode === 'playing' && !GAME.isPractice) {
-      Network.broadcast({
-        type: 'reaction',
-        emoji,
-        player: GAME.myPlayerIndex
-      });
+      Network.broadcast({ type: 'reaction', emoji, player: GAME.myPlayerIndex });
     }
   },
 
-  showReaction(emoji, playerIdx) {
+  showReaction(emoji) {
     const layer = document.getElementById('emojiLayer');
     const el = document.createElement('div');
     el.className = 'floating-emoji';
@@ -1763,16 +1558,15 @@ const UI = {
 };
 
 /* ─────────────────────────────────────────────
-   TOAST SYSTEM
+   TOAST
 ───────────────────────────────────────────── */
 const Toast = {
-  show(message, type = 'info', icon = 'ℹ️') {
-    const container = document.getElementById('toastContainer');
+  show(msg, type = 'info', icon = 'ℹ️') {
+    const c = document.getElementById('toastContainer');
     const el = document.createElement('div');
     el.className = 'toast ' + type;
-    el.innerHTML = `<span class="toast-icon">${icon}</span><span>${message}</span>`;
-    container.appendChild(el);
-    
+    el.innerHTML = `<span class="toast-icon">${icon}</span><span>${msg}</span>`;
+    c.appendChild(el);
     setTimeout(() => {
       el.classList.add('removing');
       setTimeout(() => el.remove(), 300);
@@ -1781,63 +1575,38 @@ const Toast = {
 };
 
 /* ─────────────────────────────────────────────
-   MENU PARTICLE BACKGROUND
+   OPENING SEQUENCE
 ───────────────────────────────────────────── */
-function initMenuParticles() {
-  const layer = document.getElementById('menuParticles');
-  if (!layer) return;
-  
-  const colors = ['#e63946', '#2a9d8f', '#9c6ade', '#f5c542'];
-  
-  for (let i = 0; i < 30; i++) {
-    const el = document.createElement('div');
-    el.className = 'menu-particle';
-    el.style.left = Math.random() * 100 + '%';
-    el.style.top = Math.random() * 100 + '%';
-    el.style.width = (3 + Math.random() * 8) + 'px';
-    el.style.height = el.style.width;
-    el.style.background = colors[Math.floor(Math.random() * colors.length)];
-    el.style.setProperty('--dur', (8 + Math.random() * 10) + 's');
-    el.style.setProperty('--delay', (Math.random() * 8) + 's');
-    el.style.setProperty('--tx', (Math.random() * 100 - 50) + 'px');
-    el.style.setProperty('--ty', (Math.random() * -100 - 20) + 'px');
-    layer.appendChild(el);
-  }
-}
-
-/* ─────────────────────────────────────────────
-   LOADING SEQUENCE
-───────────────────────────────────────────── */
-function runLoading() {
-  const bar = document.getElementById('loadingBar');
-  const status = document.getElementById('loadingStatus');
-  const screen = document.getElementById('loadingScreen');
+function runOpening() {
+  const fill = document.getElementById('openingBarFill');
+  const screen = document.getElementById('openingScreen');
   const menu = document.getElementById('mainMenu');
-  
-  const steps = [
-    { p: 15, t: 'Loading engine...' },
-    { p: 35, t: 'Initializing physics...' },
-    { p: 55, t: 'Preparing sounds...' },
-    { p: 75, t: 'Setting up network...' },
-    { p: 95, t: 'Almost ready...' },
-    { p: 100, t: 'Ready!' }
-  ];
-  
-  let i = 0;
+  let p = 0;
+
   const interval = setInterval(() => {
-    if (i < steps.length) {
-      bar.style.width = steps[i].p + '%';
-      status.textContent = steps[i].t;
-      i++;
-    } else {
+    p += 12 + Math.random() * 8;
+    if (p >= 100) {
+      p = 100;
       clearInterval(interval);
       setTimeout(() => {
         screen.classList.add('hidden');
         menu.classList.remove('hidden');
-        initMenuParticles();
-      }, 400);
+      }, 350);
     }
-  }, 320);
+    fill.style.width = Math.min(p, 100) + '%';
+  }, 200);
+
+  // Tap to skip
+  screen.addEventListener('click', () => {
+    if (!screen.classList.contains('hidden')) {
+      clearInterval(interval);
+      fill.style.width = '100%';
+      setTimeout(() => {
+        screen.classList.add('hidden');
+        menu.classList.remove('hidden');
+      }, 200);
+    }
+  });
 }
 
 /* ─────────────────────────────────────────────
@@ -1845,41 +1614,52 @@ function runLoading() {
 ───────────────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', () => {
   UI.init();
-  runLoading();
-  
-  // Pre-warm audio on first user interaction
+  runOpening();
+
+  // Auto-join if ?room=CODE is present in URL
+  const params = new URLSearchParams(location.search);
+  const roomParam = params.get('room');
+  if (roomParam && roomParam.length === 6) {
+    setTimeout(() => {
+      const screen = document.getElementById('openingScreen');
+      const menu = document.getElementById('mainMenu');
+      screen.classList.add('hidden');
+      menu.classList.remove('hidden');
+      document.getElementById('joinModal').classList.remove('hidden');
+      document.getElementById('joinCodeInput').value = roomParam.toUpperCase();
+    }, 2500);
+  }
+
+  // Pre-warm audio on first interaction
   document.body.addEventListener('touchstart', () => AudioManager.init(), { once: true });
   document.body.addEventListener('click', () => AudioManager.init(), { once: true });
-  
-  // Prevent context menu on canvas
-  document.getElementById('gameCanvas').addEventListener('contextmenu', (e) => e.preventDefault());
-  
-  // Prevent page zoom on double-tap
-  let lastTouch = 0;
-  document.addEventListener('touchend', (e) => {
+
+  document.getElementById('gameCanvas').addEventListener('contextmenu', e => e.preventDefault());
+
+  // Prevent double-tap zoom
+  let lastTap = 0;
+  document.addEventListener('touchend', e => {
     const now = Date.now();
-    if (now - lastTouch <= 300) e.preventDefault();
-    lastTouch = now;
+    if (now - lastTap <= 300) e.preventDefault();
+    lastTap = now;
   }, { passive: false });
 });
 
-// Prevent scroll/bounce on mobile
-window.addEventListener('touchmove', (e) => {
-  if (e.target.closest('#gameCanvas') || e.target.closest('.board-frame')) {
+// Prevent bounce scroll on game board
+window.addEventListener('touchmove', e => {
+  if (e.target.closest('#gameCanvas') || e.target.closest('.board-wrap')) {
     e.preventDefault();
   }
 }, { passive: false });
 
-// Visibility change - pause sounds
+// Pause audio when hidden
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && AudioManager._ctx) {
-    AudioManager._ctx.suspend();
-  } else if (AudioManager._ctx) {
-    AudioManager._ctx.resume();
-  }
+  if (!AudioManager._ctx) return;
+  if (document.hidden) AudioManager._ctx.suspend();
+  else AudioManager._ctx.resume();
 });
 
-// Handle beforeunload
+// Cleanup on unload
 window.addEventListener('beforeunload', () => {
   Network.disconnect();
 });
