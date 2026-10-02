@@ -1,10 +1,14 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P • FINAL ENGINE (ALL BUGS FIXED)
-   - Fixed: shot works multiple times
-   - Fixed: labels show "YOU" for local player on each device
-   - Fixed: striker placement & collision stability
-   - Fixed: endTurn flow & state management
-   - Fixed: proper local/remote label rendering
+   CARROM 3P • MAJOR UPDATE
+   - Adjustable striker bar (slides along player's baseline)
+   - Striker placed on SIDES not corners:
+       P1: bottom edge (slides left↔right)
+       P2: left edge   (slides up↔down)
+       P3: top edge    (slides left↔right)
+   - Wait overlay when not your turn
+   - Safe drag (no accidental shoot when finger leaves board)
+   - Emoji chat broadcast + floating animation
+   - Practice solo fully supported
 ═══════════════════════════════════════════════════════════ */
 
 const GAME = {
@@ -25,7 +29,6 @@ const GAME = {
 
 const PLAYER_COLORS = ['#e63946', '#2a9d8f', '#9c6ade'];
 
-/* Returns dynamic label for player index i, accounting for local device */
 function playerLabel(i) {
   if (i === GAME.myPlayerIndex) return 'YOU';
   return 'P' + (i + 1);
@@ -75,6 +78,7 @@ const AudioManager = {
           this.tone(ctx, master, 100, 65, 'sawtooth', 0.35, 0.32);
           break;
         case 'shot': this.tone(ctx, master, 380, 200, 'triangle', 0.09, 0.35); break;
+        case 'slide': this.tone(ctx, master, 1100, 900, 'sine', 0.03, 0.08); break;
         case 'win': this.melody(ctx, master, [523, 659, 784, 1047], 0.14, 0.38); break;
         case 'click': this.tone(ctx, master, 850, 420, 'sine', 0.035, 0.13); break;
         case 'connect': this.melody(ctx, master, [440, 660], 0.09, 0.28); break;
@@ -132,7 +136,7 @@ const AudioManager = {
   }
 };
 
-/* ───────────── NETWORK (unchanged — working) ───────────── */
+/* ───────────── NETWORK (unchanged from working version) ───────────── */
 const Network = {
   peer: null,
   connections: [],
@@ -319,13 +323,7 @@ const Network = {
 };
 
 /* ═══════════════════════════════════════════════════════════
-   PHYSICS
-   Fixes:
-   - MIN_SPEED lowered to 0.06 so endTurn triggers reliably
-   - allStopped threshold aligned with MIN_SPEED
-   - Striker placement checks for overlap with pucks
-   - Collision resolution more stable (max impulse clamp)
-   - Positional correction factor reduced to avoid jitter
+   PHYSICS — striker placed on sides, adjust along baseline
 ═══════════════════════════════════════════════════════════ */
 const Physics = {
   W: 700, H: 700,
@@ -352,6 +350,46 @@ const Physics = {
   bounds() {
     const p = this.BOARD_PADDING;
     return { left: p, right: this.W - p, top: p, bottom: this.H - p };
+  },
+
+  /* Baseline for a player: returns {x, y, min, max, axis}
+     P0 (bottom): slides along x at bottom edge
+     P1 (left):   slides along y at left edge
+     P2 (top):    slides along x at top edge
+  */
+  getBaseline(playerIndex) {
+    const p = this.BOARD_PADDING;
+    const inset = 40; // distance from board edge
+    switch(playerIndex) {
+      case 0: return {
+        axis: 'x',
+        x: this.W / 2,
+        y: this.H - p - inset,
+        min: p + 80,
+        max: this.W - p - 80
+      };
+      case 1: return {
+        axis: 'y',
+        x: p + inset,
+        y: this.H / 2,
+        min: p + 80,
+        max: this.H - p - 80
+      };
+      case 2: return {
+        axis: 'x',
+        x: this.W / 2,
+        y: p + inset,
+        min: p + 80,
+        max: this.W - p - 80
+      };
+      default: return {
+        axis: 'x',
+        x: this.W / 2,
+        y: this.H - p - inset,
+        min: p + 80,
+        max: this.W - p - 80
+      };
+    }
   },
 
   createPucks() {
@@ -384,20 +422,23 @@ const Physics = {
     return pucks;
   },
 
-  createStriker(i) {
-    const bases = [
-      { x: this.W / 2, y: this.H - this.BOARD_PADDING - 55 },
-      { x: this.BOARD_PADDING + 100, y: this.BOARD_PADDING + 100 },
-      { x: this.W - this.BOARD_PADDING - 100, y: this.BOARD_PADDING + 100 }
-    ];
-    const b = bases[i];
+  createStriker(playerIndex, sideOffset = 0.5) {
+    const base = this.getBaseline(playerIndex);
+    let x, y;
+    if (base.axis === 'x') {
+      x = base.min + (base.max - base.min) * sideOffset;
+      y = base.y;
+    } else {
+      x = base.x;
+      y = base.min + (base.max - base.min) * sideOffset;
+    }
     const s = {
-      x: b.x, y: b.y, vx: 0, vy: 0,
+      x, y, vx: 0, vy: 0,
       radius: this.STRIKER_RADIUS,
-      color: PLAYER_COLORS[i],
+      color: PLAYER_COLORS[playerIndex],
       type: 'striker', active: true, trail: []
     };
-    // Push striker out of any overlapping puck — critical fix
+    // Push out of overlapping pucks
     for (const puck of this.pucks) {
       if (!puck.active) continue;
       const dx = s.x - puck.x, dy = s.y - puck.y;
@@ -420,7 +461,6 @@ const Physics = {
 
     const dist = Math.sqrt(d2);
     const nx = dx / dist, ny = dy / dist;
-    // Reduced positional correction to avoid jitter
     const overlap = (minDist - dist) * 0.5;
 
     a.x -= nx * overlap; a.y -= ny * overlap;
@@ -433,7 +473,6 @@ const Physics = {
     const invA = 1 / a.radius;
     const invB = 1 / b.radius;
     const j = -(1 + this.RESTITUTION) * vn / (invA + invB);
-    // Clamp impulse to avoid explosive collisions in dense clusters
     const maxJ = 8;
     const clampedJ = Math.max(-maxJ, Math.min(maxJ, j));
     const ix = clampedJ * nx, iy = clampedJ * ny;
@@ -456,7 +495,6 @@ const Physics = {
       this.stepBody(puck, b, onWall);
       this.checkPockets(puck, onPocket, false);
     }
-    // Multiple solver iterations for stability
     for (let iter = 0; iter < 2; iter++) {
       for (let i = 0; i < this.pucks.length; i++) {
         if (!this.pucks[i].active) continue;
@@ -544,6 +582,7 @@ const Renderer = {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.W, this.H);
     this.drawBoard();
+    this.drawBaseline();
     this.drawTrails();
     this.drawPucks();
     this.drawStriker();
@@ -585,6 +624,7 @@ const Renderer = {
     this.roundRect(ctx, p - 5, p - 5, w + 10, h + 10, 18);
     ctx.stroke();
 
+    // Center circle
     ctx.beginPath();
     ctx.arc(this.W / 2, this.H / 2, 72, 0, Math.PI * 2);
     ctx.strokeStyle = '#c4a276';
@@ -605,6 +645,7 @@ const Renderer = {
     ctx.fillStyle = '#f8eed8';
     ctx.fill();
 
+    // Corner arcs
     const corners = [
       { x: p, y: p, s: 0, e: Math.PI / 2 },
       { x: this.W - p, y: p, s: Math.PI / 2, e: Math.PI },
@@ -619,6 +660,7 @@ const Renderer = {
       ctx.stroke();
     });
 
+    // Pockets
     for (const pk of Physics.pockets) {
       const pg = ctx.createRadialGradient(pk.x, pk.y, 1, pk.x, pk.y, Physics.POCKET_RADIUS);
       pg.addColorStop(0, '#000000');
@@ -638,6 +680,32 @@ const Renderer = {
       ctx.lineWidth = 2;
       ctx.stroke();
     }
+  },
+
+  /* Draw the current player's baseline as a subtle highlight */
+  drawBaseline() {
+    if (GAME.mode === 'menu') return;
+    if (!GAME.isPractice && GAME.currentTurn !== GAME.myPlayerIndex) return;
+    const s = Physics.striker;
+    if (!s || !s.active) return;
+    if (Math.hypot(s.vx, s.vy) > 0.3) return;
+    const base = Physics.getBaseline(GAME.currentTurn);
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.strokeStyle = PLAYER_COLORS[GAME.currentTurn] + '55';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 8]);
+    ctx.lineDashOffset = -this.time * 30;
+    ctx.beginPath();
+    if (base.axis === 'x') {
+      ctx.moveTo(base.min, base.y);
+      ctx.lineTo(base.max, base.y);
+    } else {
+      ctx.moveTo(base.x, base.min);
+      ctx.lineTo(base.x, base.max);
+    }
+    ctx.stroke();
+    ctx.restore();
   },
 
   drawTrails() {
@@ -785,7 +853,8 @@ const Renderer = {
     if (Math.hypot(s.vx, s.vy) > 0.4) return;
 
     const ctx = this.ctx;
-    const start = Input.dragStart, current = Input.dragCurrent;
+    const start = Input.aimStart, current = Input.aimCurrent;
+    if (!start || !current) return;
     const dx = current.x - start.x, dy = current.y - start.y;
     const dist = Math.hypot(dx, dy);
     if (dist < 14) return;
@@ -859,59 +928,48 @@ const Renderer = {
 };
 
 /* ═══════════════════════════════════════════════════════════
-   INPUT — REWRITTEN FOR RELIABILITY
-   - Uses pointer events when available (unified mouse + touch)
-   - Falls back to mouse + touch events
-   - Clear state machine: idle → dragging → shot
-   - No early returns that skip state cleanup
+   INPUT
+   - Two modes:
+     1. ADJUST mode: drag the striker along its baseline (started
+        from touching the striker)
+     2. AIM mode: drag anywhere else to aim (finger movement
+        defines the shot vector)
+   - If finger goes OFF the board during AIM, we do NOT shoot.
+     We wait for the user to lift their finger to cancel.
+   - Only shoots when finger lifts INSIDE the board.
 ═══════════════════════════════════════════════════════════ */
 const Input = {
   isDragging: false,
-  dragStart: null,
-  dragCurrent: null,
+  mode: null, // 'adjust' or 'aim'
+  adjustStart: null, // { x, y } of striker when adjust began
+  aimStart: null,    // { x, y } of the finger when aim began
+  aimCurrent: null,
   canvas: null,
-  activePointerId: null,
 
   init(canvas) {
     this.canvas = canvas;
-
-    if (window.PointerEvent) {
-      canvas.addEventListener('pointerdown', this.onDown.bind(this));
-      canvas.addEventListener('pointermove', this.onMove.bind(this));
-      canvas.addEventListener('pointerup', this.onUp.bind(this));
-      canvas.addEventListener('pointercancel', this.onUp.bind(this));
-      canvas.addEventListener('pointerleave', this.onUp.bind(this));
-    } else {
-      canvas.addEventListener('mousedown', this.onDown.bind(this));
-      canvas.addEventListener('mousemove', this.onMove.bind(this));
-      canvas.addEventListener('mouseup', this.onUp.bind(this));
-      canvas.addEventListener('mouseleave', this.onUp.bind(this));
-      canvas.addEventListener('touchstart', this.onDown.bind(this), { passive: false });
-      canvas.addEventListener('touchmove', this.onMove.bind(this), { passive: false });
-      canvas.addEventListener('touchend', this.onUp.bind(this), { passive: false });
-      canvas.addEventListener('touchcancel', this.onUp.bind(this), { passive: false });
-    }
+    canvas.addEventListener('mousedown', this.onDown.bind(this));
+    canvas.addEventListener('mousemove', this.onMove.bind(this));
+    canvas.addEventListener('mouseup', this.onUp.bind(this));
+    canvas.addEventListener('mouseleave', this.onCancel.bind(this));
+    canvas.addEventListener('touchstart', this.onDown.bind(this), { passive: false });
+    canvas.addEventListener('touchmove', this.onMove.bind(this), { passive: false });
+    canvas.addEventListener('touchend', this.onUp.bind(this), { passive: false });
+    canvas.addEventListener('touchcancel', this.onCancel.bind(this), { passive: false });
   },
 
   coords(e) {
     const rect = this.canvas.getBoundingClientRect();
     const sx = this.canvas.width / rect.width;
     const sy = this.canvas.height / rect.height;
-    let clientX, clientY;
-    if (e.touches && e.touches.length) {
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else if (e.changedTouches && e.changedTouches.length) {
-      clientX = e.changedTouches[0].clientX;
-      clientY = e.changedTouches[0].clientY;
-    } else {
-      clientX = e.clientX;
-      clientY = e.clientY;
-    }
-    return { x: (clientX - rect.left) * sx, y: (clientY - rect.top) * sy };
+    let cx, cy;
+    if (e.touches && e.touches.length) { cx = e.touches[0].clientX; cy = e.touches[0].clientY; }
+    else if (e.changedTouches && e.changedTouches.length) { cx = e.changedTouches[0].clientX; cy = e.changedTouches[0].clientY; }
+    else { cx = e.clientX; cy = e.clientY; }
+    return { x: (cx - rect.left) * sx, y: (cy - rect.top) * sy };
   },
 
-  canShoot() {
+  canPlay() {
     if (GAME.mode !== 'playing' && !GAME.isPractice) return false;
     if (!GAME.isPractice && GAME.currentTurn !== GAME.myPlayerIndex) return false;
     const s = Physics.striker;
@@ -921,18 +979,35 @@ const Input = {
     return true;
   },
 
+  isInsideBoard(pos) {
+    const p = Physics.BOARD_PADDING - 4;
+    return pos.x > p && pos.x < Physics.W - p && pos.y > p && pos.y < Physics.H - p;
+  },
+
   onDown(e) {
     if (e.cancelable) e.preventDefault();
     AudioManager.init();
-    if (!this.canShoot()) return;
+    if (!this.canPlay()) return;
 
     const s = Physics.striker;
     const pos = this.coords(e);
     const dist = Math.hypot(pos.x - s.x, pos.y - s.y);
-    if (dist < 120) {
+
+    // If user touches the striker: enter adjust mode
+    if (dist < s.radius + 24) {
       this.isDragging = true;
-      this.dragStart = { x: s.x, y: s.y };
-      this.dragCurrent = { x: pos.x, y: pos.y };
+      this.mode = 'adjust';
+      this.adjustStart = { x: s.x, y: s.y };
+      AudioManager.play('click');
+      return;
+    }
+
+    // Otherwise, if user touches anywhere else on the board: enter aim mode
+    if (this.isInsideBoard(pos)) {
+      this.isDragging = true;
+      this.mode = 'aim';
+      this.aimStart = { x: pos.x, y: pos.y };
+      this.aimCurrent = { x: pos.x, y: pos.y };
       AudioManager.play('click');
     }
   },
@@ -941,57 +1016,109 @@ const Input = {
     if (!this.isDragging) return;
     if (e.cancelable) e.preventDefault();
     const pos = this.coords(e);
-    this.dragCurrent = { x: pos.x, y: pos.y };
-    const dx = pos.x - this.dragStart.x, dy = pos.y - this.dragStart.y;
-    const dist = Math.hypot(dx, dy);
-    Game.updatePower(Math.min(dist / 90, 1));
+
+    if (this.mode === 'adjust') {
+      // Slide striker along baseline
+      const base = Physics.getBaseline(GAME.currentTurn);
+      const s = Physics.striker;
+      if (!s || !s.active) return;
+      if (base.axis === 'x') {
+        s.x = Math.max(base.min, Math.min(base.max, pos.x));
+      } else {
+        s.y = Math.max(base.min, Math.min(base.max, pos.y));
+      }
+      // No sound spam — play only occasionally
+      if (Math.random() < 0.15) AudioManager.play('slide', { volume: 0.3 });
+      return;
+    }
+
+    if (this.mode === 'aim') {
+      this.aimCurrent = { x: pos.x, y: pos.y };
+      const dx = pos.x - this.aimStart.x, dy = pos.y - this.aimStart.y;
+      const dist = Math.hypot(dx, dy);
+      Game.updatePower(Math.min(dist / 90, 1));
+    }
   },
 
   onUp(e) {
     if (!this.isDragging) return;
     if (e.cancelable) e.preventDefault();
 
-    const s = Physics.striker;
-    const wasDragging = this.isDragging;
-    const startPos = this.dragStart;
+    const mode = this.mode;
+    const aimStart = this.aimStart;
+    const adjustStart = this.adjustStart;
 
-    // Always reset first — ensures next shot can start
+    // Reset state FIRST
     this.isDragging = false;
-    this.dragStart = null;
-    this.dragCurrent = null;
+    this.mode = null;
+    this.aimStart = null;
+    this.aimCurrent = null;
+    this.adjustStart = null;
     Game.updatePower(0);
 
-    if (!wasDragging || !s || !s.active || !startPos) return;
-
-    const pos = this.coords(e);
-    const dx = pos.x - startPos.x;
-    const dy = pos.y - startPos.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < 18) return;
-
-    const power = Math.min(dist / 90, 1) * Physics.MAX_POWER;
-    const angle = Math.atan2(-dy, -dx);
-    s.vx = Math.cos(angle) * power;
-    s.vy = Math.sin(angle) * power;
-    AudioManager.play('shot');
-
-    if (GAME.mode === 'playing' && !GAME.isPractice) {
-      Network.broadcast({
-        type: 'shot',
-        player: GAME.myPlayerIndex,
-        vx: s.vx, vy: s.vy, x: s.x, y: s.y
-      });
+    if (mode === 'adjust') {
+      // Just slide — no shot on release
+      if (Physics.striker && Physics.striker.active) {
+        // Broadcast new striker position for others to see
+        if (GAME.mode === 'playing' && !GAME.isPractice) {
+          Network.broadcast({
+            type: 'striker_move',
+            player: GAME.myPlayerIndex,
+            x: Physics.striker.x,
+            y: Physics.striker.y
+          });
+        }
+      }
+      return;
     }
-    Game.isResolving = true;
+
+    if (mode === 'aim') {
+      const pos = this.coords(e);
+      // CRITICAL: if user lifted finger OUTSIDE the board, cancel the shot
+      if (!this.isInsideBoard(pos)) {
+        AudioManager.play('click');
+        return;
+      }
+
+      const s = Physics.striker;
+      if (!s || !s.active || !aimStart) return;
+
+      const dx = pos.x - aimStart.x, dy = pos.y - aimStart.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 18) return;
+
+      const power = Math.min(dist / 90, 1) * Physics.MAX_POWER;
+      const angle = Math.atan2(-dy, -dx);
+      s.vx = Math.cos(angle) * power;
+      s.vy = Math.sin(angle) * power;
+      AudioManager.play('shot');
+
+      if (GAME.mode === 'playing' && !GAME.isPractice) {
+        Network.broadcast({
+          type: 'shot',
+          player: GAME.myPlayerIndex,
+          vx: s.vx, vy: s.vy, x: s.x, y: s.y
+        });
+      }
+      Game.isResolving = true;
+      Game.resolveStartTime = performance.now();
+    }
+  },
+
+  onCancel(e) {
+    if (!this.isDragging) return;
+    // Cancel entirely — no shot
+    this.isDragging = false;
+    this.mode = null;
+    this.aimStart = null;
+    this.aimCurrent = null;
+    this.adjustStart = null;
+    Game.updatePower(0);
   }
 };
 
 /* ═══════════════════════════════════════════════════════════
    GAME CONTROLLER
-   Key fixes:
-   - endTurn only fires when physics fully stopped
-   - Safety timeout to guarantee turn advances
-   - Striker is recreated cleanly each turn
 ═══════════════════════════════════════════════════════════ */
 const Game = {
   isResolving: false,
@@ -1004,8 +1131,10 @@ const Game = {
     Input.init(Renderer.canvas);
     Physics.init();
     Physics.pucks = Physics.createPucks();
-    Physics.striker = Physics.createStriker(GAME.currentTurn);
+    Physics.striker = Physics.createStriker(GAME.currentTurn, 0.5);
     this.isResolving = false;
+    this.updateAdjustSlider();
+    this.updateWaitOverlay();
     this.loop(performance.now());
   },
 
@@ -1044,7 +1173,6 @@ const Game = {
     if (this.isResolving) {
       const elapsed = t - this.resolveStartTime;
       const stopped = Physics.allStopped();
-      // End turn when physics stopped, OR after 8s safety timeout
       if (stopped || elapsed > 8000) {
         this.isResolving = false;
         this.endTurn();
@@ -1063,11 +1191,13 @@ const Game = {
     const foul = !Physics.striker || !Physics.striker.active;
     if (foul) Toast.show('Foul — Turn passes', 'error', '⚠️');
     GAME.currentTurn = (GAME.currentTurn + 1) % 3;
-    Physics.striker = Physics.createStriker(GAME.currentTurn);
+    Physics.striker = Physics.createStriker(GAME.currentTurn, 0.5);
     if (GAME.mode === 'playing' && !GAME.isPractice && GAME.isHost) {
       Network.broadcast({ type: 'turn_change', currentTurn: GAME.currentTurn });
     }
     this.updateTurnUI();
+    this.updateAdjustSlider();
+    this.updateWaitOverlay();
     AudioManager.play('turn');
   },
 
@@ -1140,32 +1270,100 @@ const Game = {
     else frame.classList.remove('active');
   },
 
+  /* Show/hide the adjust slider row */
+  updateAdjustSlider() {
+    const row = document.getElementById('adjustRow');
+    const thumb = document.getElementById('adjustThumb');
+    const track = document.getElementById('adjustTrack');
+    const isMyTurn = GAME.isPractice || GAME.currentTurn === GAME.myPlayerIndex;
+    if (!isMyTurn || !Physics.striker || !Physics.striker.active) {
+      row.classList.add('hidden');
+      return;
+    }
+    row.classList.remove('hidden');
+    const base = Physics.getBaseline(GAME.currentTurn);
+    // Compute thumb position: 0–1 along baseline
+    let pct = 0.5;
+    if (base.axis === 'x') {
+      pct = (Physics.striker.x - base.min) / (base.max - base.min);
+    } else {
+      pct = (Physics.striker.y - base.min) / (base.max - base.min);
+    }
+    pct = Math.max(0, Math.min(1, pct));
+    thumb.style.left = (pct * 100) + '%';
+
+    // Setup track drag if not already
+    if (!track.dataset.bound) {
+      track.dataset.bound = '1';
+      track.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        AudioManager.init();
+        if (!Input.canPlay()) return;
+        const rect = track.getBoundingClientRect();
+        const updateFromX = (clientX) => {
+          const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+          const pct = x / rect.width;
+          const s = Physics.striker;
+          if (!s || !s.active) return;
+          const base = Physics.getBaseline(GAME.currentTurn);
+          if (base.axis === 'x') {
+            s.x = base.min + (base.max - base.min) * pct;
+          } else {
+            s.y = base.min + (base.max - base.min) * pct;
+          }
+          thumb.style.left = (pct * 100) + '%';
+          if (Math.random() < 0.3) AudioManager.play('slide', { volume: 0.25 });
+        };
+        updateFromX(e.clientX);
+        const onMove = (ev) => {
+          if (ev.cancelable) ev.preventDefault();
+          updateFromX(ev.clientX);
+        };
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+          // Broadcast new position
+          if (GAME.mode === 'playing' && !GAME.isPractice && Physics.striker) {
+            Network.broadcast({
+              type: 'striker_move',
+              player: GAME.myPlayerIndex,
+              x: Physics.striker.x,
+              y: Physics.striker.y
+            });
+          }
+        };
+        window.addEventListener('pointermove', onMove, { passive: false });
+        window.addEventListener('pointerup', onUp);
+      });
+    }
+  },
+
+  /* Show/hide the wait overlay */
+  updateWaitOverlay() {
+    const overlay = document.getElementById('waitOverlay');
+    const title = document.getElementById('waitTitle');
+    const sub = document.getElementById('waitSub');
+    const isMyTurn = GAME.isPractice || GAME.currentTurn === GAME.myPlayerIndex;
+    if (isMyTurn || GAME.mode === 'menu') {
+      overlay.classList.add('hidden');
+      return;
+    }
+    overlay.classList.remove('hidden');
+    title.textContent = 'WAIT...';
+    sub.textContent = playerLabel(GAME.currentTurn) + ' is playing';
+  },
+
   updateScores() {
     GAME.players.forEach((p, i) => {
       const el = document.getElementById('scoreP' + i);
       if (el) el.textContent = p.score;
-      // Dynamic label based on local player
       const nameEl = document.getElementById('nameP' + i);
       if (nameEl) nameEl.textContent = playerLabel(i);
     });
-    // Also update static YOU chip — it's always index 0
-    // (Which chip is "YOU" depends on myPlayerIndex)
-    this.relabelChips();
-  },
-
-  relabelChips() {
-    // Reorder chips so local player is always on the left with "YOU"
-    const row = document.querySelector('.players-row');
-    if (!row) return;
-    const chips = row.querySelectorAll('.player-chip');
-
-    // Update names dynamically
-    chips.forEach((chip, displayIndex) => {
-      const actualPlayerIndex = parseInt(chip.dataset.p);
+    document.querySelectorAll('.player-chip').forEach(chip => {
+      const idx = parseInt(chip.dataset.p);
       const nameEl = chip.querySelector('.pc-name');
-      if (nameEl) {
-        nameEl.textContent = playerLabel(actualPlayerIndex);
-      }
+      if (nameEl) nameEl.textContent = playerLabel(idx);
     });
   }
 };
@@ -1341,8 +1539,10 @@ const UI = {
         GAME.roomCode = data.roomCode;
         document.getElementById('connectingOverlay').classList.add('hidden');
         Toast.show('Connected as ' + playerLabel(GAME.myPlayerIndex), 'success', '🎉');
-        // Update chip labels immediately so P2/P3 see correct labels
-        setTimeout(() => Game.relabelChips(), 100);
+        setTimeout(() => {
+          Game.updateScores();
+          Game.relabelChips();
+        }, 100);
         break;
       case 'room_full':
         document.getElementById('connectingOverlay').classList.add('hidden');
@@ -1370,15 +1570,27 @@ const UI = {
           Game.resolveStartTime = performance.now();
         }
         break;
+      case 'striker_move':
+        // Another player moved their striker along baseline
+        if (data.player !== GAME.myPlayerIndex && Physics.striker) {
+          Physics.striker.x = data.x;
+          Physics.striker.y = data.y;
+        }
+        break;
       case 'turn_change':
         GAME.currentTurn = data.currentTurn;
-        Physics.striker = Physics.createStriker(GAME.currentTurn);
+        Physics.striker = Physics.createStriker(GAME.currentTurn, 0.5);
         Game.isResolving = false;
         Game.updateTurnUI();
+        Game.updateAdjustSlider();
+        Game.updateWaitOverlay();
         AudioManager.play('turn');
         break;
       case 'reaction':
-        this.showReaction(data.emoji);
+        // Only show if it's from someone else
+        if (data.player !== GAME.myPlayerIndex) {
+          this.showReaction(data.emoji);
+        }
         break;
       case 'play_again':
         this.playAgain();
@@ -1402,7 +1614,7 @@ const UI = {
         slot.classList.add('connected');
         avatar.classList.remove('empty');
         avatar.textContent = (idx + 1);
-        name.textContent = playerLabel(idx);
+        name.textContent = 'P' + (idx + 1);
         tag.textContent = '✓ READY';
       } else {
         slot.classList.remove('connected');
@@ -1500,10 +1712,8 @@ const UI = {
     document.getElementById('connectingOverlay').classList.add('hidden');
     GAME.mode = GAME.isPractice ? 'practice' : 'playing';
     GAME.players.forEach(p => p.score = 0);
-    // Update all labels & scores based on local device
     Game.updateScores();
     Game.updateTurnUI();
-    // Ensure chip labels reflect local player
     document.querySelectorAll('.player-chip').forEach(chip => {
       const idx = parseInt(chip.dataset.p);
       const nameEl = chip.querySelector('.pc-name');
@@ -1552,16 +1762,19 @@ const UI = {
     GAME.players.forEach(p => p.score = 0);
     GAME.currentTurn = 0;
     Physics.pucks = Physics.createPucks();
-    Physics.striker = Physics.createStriker(0);
+    Physics.striker = Physics.createStriker(0, 0.5);
     Renderer.pocketPops = [];
     Game.isResolving = false;
     Game.updateScores();
     Game.updateTurnUI();
+    Game.updateAdjustSlider();
+    Game.updateWaitOverlay();
     if (GAME.mode === 'playing' && GAME.isHost) {
       Network.broadcast({ type: 'play_again' });
     }
   },
 
+  /* Emoji chat — send to all peers AND show locally */
   sendReaction(emoji) {
     AudioManager.play('click');
     this.showReaction(emoji);
@@ -1570,16 +1783,19 @@ const UI = {
     }
   },
 
+  /* Shows a floating emoji over the board */
   showReaction(emoji) {
     const layer = document.getElementById('emojiLayer');
     const el = document.createElement('div');
     el.className = 'floating-emoji';
     el.textContent = emoji;
     el.style.left = (15 + Math.random() * 70) + '%';
-    el.style.bottom = '80px';
-    el.style.animationDuration = (2 + Math.random() * 0.8) + 's';
+    el.style.bottom = '120px';
+    el.style.animationDuration = (2.4 + Math.random() * 0.8) + 's';
     layer.appendChild(el);
-    setTimeout(() => el.remove(), 3000);
+    setTimeout(() => el.remove(), 3400);
+    // Play a soft pop sound
+    if (GAME.audioEnabled) AudioManager.play('notification', { volume: 0.3 });
   },
 
   closeModal(id) { document.getElementById(id).classList.add('hidden'); }
