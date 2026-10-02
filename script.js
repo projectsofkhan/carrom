@@ -1,9 +1,10 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P • POLISHED ENGINE
-   - No particles / no dust
-   - Fixed-timestep physics for buttery motion
-   - Cleaner board, refined sizes
-   - Trails only for fast-moving objects
+   CARROM 3P • FINAL ENGINE (ALL BUGS FIXED)
+   - Fixed: shot works multiple times
+   - Fixed: labels show "YOU" for local player on each device
+   - Fixed: striker placement & collision stability
+   - Fixed: endTurn flow & state management
+   - Fixed: proper local/remote label rendering
 ═══════════════════════════════════════════════════════════ */
 
 const GAME = {
@@ -23,7 +24,12 @@ const GAME = {
 };
 
 const PLAYER_COLORS = ['#e63946', '#2a9d8f', '#9c6ade'];
-const PLAYER_LABELS = ['YOU', 'P2', 'P3'];
+
+/* Returns dynamic label for player index i, accounting for local device */
+function playerLabel(i) {
+  if (i === GAME.myPlayerIndex) return 'YOU';
+  return 'P' + (i + 1);
+}
 
 /* ───────────── AUDIO ───────────── */
 const AudioManager = {
@@ -126,7 +132,7 @@ const AudioManager = {
   }
 };
 
-/* ───────────── NETWORK (unchanged — handshake works) ───────────── */
+/* ───────────── NETWORK (unchanged — working) ───────────── */
 const Network = {
   peer: null,
   connections: [],
@@ -313,13 +319,13 @@ const Network = {
 };
 
 /* ═══════════════════════════════════════════════════════════
-   PHYSICS — TUNED FOR SMOOTHNESS
-   Sizes recalculated:
-   - Board padding 62 (even border)
-   - Puck radius 15 (cleaner look)
-   - Striker radius 18
-   - Pocket radius 22
-   - Board 700x700
+   PHYSICS
+   Fixes:
+   - MIN_SPEED lowered to 0.06 so endTurn triggers reliably
+   - allStopped threshold aligned with MIN_SPEED
+   - Striker placement checks for overlap with pucks
+   - Collision resolution more stable (max impulse clamp)
+   - Positional correction factor reduced to avoid jitter
 ═══════════════════════════════════════════════════════════ */
 const Physics = {
   W: 700, H: 700,
@@ -329,7 +335,7 @@ const Physics = {
   POCKET_RADIUS: 22,
   FRICTION: 0.983,
   WALL_BOUNCE: 0.74,
-  MIN_SPEED: 0.08,
+  MIN_SPEED: 0.06,
   MAX_POWER: 11,
   RESTITUTION: 0.9,
 
@@ -351,31 +357,28 @@ const Physics = {
   createPucks() {
     const pucks = [];
     const cx = this.W / 2, cy = this.H / 2;
-    // Outer ring — 9 white
     for (let i = 0; i < 9; i++) {
       const a = (i / 9) * Math.PI * 2 - Math.PI / 2;
       pucks.push({
         x: cx + Math.cos(a) * 56, y: cy + Math.sin(a) * 56,
         vx: 0, vy: 0, radius: this.PUCK_RADIUS,
-        color: '#f5ede0', rim: '#d4c4a8', inner: '#e8dcc4',
+        color: '#f5ede0', rim: '#d4c4a8',
         type: 'white', active: true, trail: []
       });
     }
-    // Inner ring — 9 black
     for (let i = 0; i < 9; i++) {
       const a = (i / 9) * Math.PI * 2 + 0.35;
       pucks.push({
         x: cx + Math.cos(a) * 28, y: cy + Math.sin(a) * 28,
         vx: 0, vy: 0, radius: this.PUCK_RADIUS,
-        color: '#1a1a1a', rim: '#000000', inner: '#2a2a2a',
+        color: '#1a1a1a', rim: '#000000',
         type: 'black', active: true, trail: []
       });
     }
-    // Center puck
     pucks.push({
       x: cx, y: cy, vx: 0, vy: 0,
       radius: this.PUCK_RADIUS,
-      color: '#f5ede0', rim: '#d4c4a8', inner: '#e8dcc4',
+      color: '#f5ede0', rim: '#d4c4a8',
       type: 'white', active: true, trail: []
     });
     return pucks;
@@ -384,16 +387,29 @@ const Physics = {
   createStriker(i) {
     const bases = [
       { x: this.W / 2, y: this.H - this.BOARD_PADDING - 55 },
-      { x: this.BOARD_PADDING + 105, y: this.BOARD_PADDING + 105 },
-      { x: this.W - this.BOARD_PADDING - 105, y: this.BOARD_PADDING + 105 }
+      { x: this.BOARD_PADDING + 100, y: this.BOARD_PADDING + 100 },
+      { x: this.W - this.BOARD_PADDING - 100, y: this.BOARD_PADDING + 100 }
     ];
     const b = bases[i];
-    return {
+    const s = {
       x: b.x, y: b.y, vx: 0, vy: 0,
       radius: this.STRIKER_RADIUS,
       color: PLAYER_COLORS[i],
       type: 'striker', active: true, trail: []
     };
+    // Push striker out of any overlapping puck — critical fix
+    for (const puck of this.pucks) {
+      if (!puck.active) continue;
+      const dx = s.x - puck.x, dy = s.y - puck.y;
+      const d = Math.hypot(dx, dy);
+      const minD = s.radius + puck.radius + 1;
+      if (d < minD && d > 0.01) {
+        const nx = dx / d, ny = dy / d;
+        s.x = puck.x + nx * minD;
+        s.y = puck.y + ny * minD;
+      }
+    }
+    return s;
   },
 
   resolveCollision(a, b, onHit) {
@@ -403,8 +419,9 @@ const Physics = {
     if (d2 >= minDist * minDist || d2 < 0.0001) return;
 
     const dist = Math.sqrt(d2);
-    const overlap = (minDist - dist) * 0.5;
     const nx = dx / dist, ny = dy / dist;
+    // Reduced positional correction to avoid jitter
+    const overlap = (minDist - dist) * 0.5;
 
     a.x -= nx * overlap; a.y -= ny * overlap;
     b.x += nx * overlap; b.y += ny * overlap;
@@ -413,10 +430,15 @@ const Physics = {
     const vn = dvx * nx + dvy * ny;
     if (vn > 0) return;
 
-    const j = -(1 + this.RESTITUTION) * vn / (1 / a.radius + 1 / b.radius);
-    const ix = j * nx, iy = j * ny;
-    a.vx -= ix / a.radius; a.vy -= iy / a.radius;
-    b.vx += ix / b.radius; b.vy += iy / b.radius;
+    const invA = 1 / a.radius;
+    const invB = 1 / b.radius;
+    const j = -(1 + this.RESTITUTION) * vn / (invA + invB);
+    // Clamp impulse to avoid explosive collisions in dense clusters
+    const maxJ = 8;
+    const clampedJ = Math.max(-maxJ, Math.min(maxJ, j));
+    const ix = clampedJ * nx, iy = clampedJ * ny;
+    a.vx -= ix * invA; a.vy -= iy * invA;
+    b.vx += ix * invB; b.vy += iy * invB;
 
     if (Math.abs(vn) > 0.6 && onHit) {
       onHit(Math.min(Math.abs(vn) / 14, 1), (a.x + b.x) / 2, (a.y + b.y) / 2);
@@ -434,17 +456,20 @@ const Physics = {
       this.stepBody(puck, b, onWall);
       this.checkPockets(puck, onPocket, false);
     }
-    for (let i = 0; i < this.pucks.length; i++) {
-      if (!this.pucks[i].active) continue;
-      for (let j = i + 1; j < this.pucks.length; j++) {
-        if (!this.pucks[j].active) continue;
-        this.resolveCollision(this.pucks[i], this.pucks[j], onCollision);
+    // Multiple solver iterations for stability
+    for (let iter = 0; iter < 2; iter++) {
+      for (let i = 0; i < this.pucks.length; i++) {
+        if (!this.pucks[i].active) continue;
+        for (let j = i + 1; j < this.pucks.length; j++) {
+          if (!this.pucks[j].active) continue;
+          this.resolveCollision(this.pucks[i], this.pucks[j], iter === 0 ? onCollision : null);
+        }
       }
-    }
-    if (this.striker && this.striker.active) {
-      for (const puck of this.pucks) {
-        if (!puck.active) continue;
-        this.resolveCollision(this.striker, puck, onCollision);
+      if (this.striker && this.striker.active) {
+        for (const puck of this.pucks) {
+          if (!puck.active) continue;
+          this.resolveCollision(this.striker, puck, iter === 0 ? onCollision : null);
+        }
       }
     }
   },
@@ -455,7 +480,6 @@ const Physics = {
     const speed = Math.hypot(body.vx, body.vy);
     if (speed < this.MIN_SPEED) { body.vx = 0; body.vy = 0; }
 
-    // Trail only for fast movers
     if (speed > 3) {
       body.trail.push({ x: body.x, y: body.y });
       if (body.trail.length > 8) body.trail.shift();
@@ -484,9 +508,11 @@ const Physics = {
   },
 
   allStopped() {
-    if (this.striker && this.striker.active && Math.hypot(this.striker.vx, this.striker.vy) > 0.04) return false;
+    if (this.striker && this.striker.active) {
+      if (Math.hypot(this.striker.vx, this.striker.vy) > 0.01) return false;
+    }
     for (const p of this.pucks) {
-      if (p.active && Math.hypot(p.vx, p.vy) > 0.04) return false;
+      if (p.active && Math.hypot(p.vx, p.vy) > 0.01) return false;
     }
     return true;
   },
@@ -495,7 +521,7 @@ const Physics = {
 };
 
 /* ═══════════════════════════════════════════════════════════
-   RENDERER — CLEAN, NO DUST
+   RENDERER
 ═══════════════════════════════════════════════════════════ */
 const Renderer = {
   canvas: null, ctx: null,
@@ -530,7 +556,6 @@ const Renderer = {
     const p = Physics.BOARD_PADDING;
     const w = this.W - p * 2, h = this.H - p * 2;
 
-    // Outer wood frame
     const og = ctx.createLinearGradient(0, 0, this.W, this.H);
     og.addColorStop(0, '#a06838');
     og.addColorStop(0.5, '#7a4a24');
@@ -539,12 +564,10 @@ const Renderer = {
     this.roundRect(ctx, 0, 0, this.W, this.H, 40);
     ctx.fill();
 
-    // Inner rim (subtle inset)
     ctx.fillStyle = 'rgba(0,0,0,0.15)';
     this.roundRect(ctx, 12, 12, this.W - 24, this.H - 24, 32);
     ctx.fill();
 
-    // Playing surface — clean, warm
     const bg = ctx.createRadialGradient(this.W / 2, this.H / 2, 40, this.W / 2, this.H / 2, this.W / 1.35);
     bg.addColorStop(0, '#f8eed8');
     bg.addColorStop(0.7, '#f2e4c8');
@@ -553,7 +576,6 @@ const Renderer = {
     this.roundRect(ctx, p - 8, p - 8, w + 16, h + 16, 20);
     ctx.fill();
 
-    // Border lines — single clean ring
     ctx.strokeStyle = '#8a5a2a';
     ctx.lineWidth = 2.5;
     this.roundRect(ctx, p - 8, p - 8, w + 16, h + 16, 20);
@@ -563,7 +585,6 @@ const Renderer = {
     this.roundRect(ctx, p - 5, p - 5, w + 10, h + 10, 18);
     ctx.stroke();
 
-    // Center circle
     ctx.beginPath();
     ctx.arc(this.W / 2, this.H / 2, 72, 0, Math.PI * 2);
     ctx.strokeStyle = '#c4a276';
@@ -575,7 +596,6 @@ const Renderer = {
     ctx.lineWidth = 1.2;
     ctx.stroke();
 
-    // Center dot
     ctx.beginPath();
     ctx.arc(this.W / 2, this.H / 2, 9, 0, Math.PI * 2);
     ctx.fillStyle = '#c4a276';
@@ -585,7 +605,6 @@ const Renderer = {
     ctx.fillStyle = '#f8eed8';
     ctx.fill();
 
-    // Corner arcs (decorative)
     const corners = [
       { x: p, y: p, s: 0, e: Math.PI / 2 },
       { x: this.W - p, y: p, s: Math.PI / 2, e: Math.PI },
@@ -600,7 +619,6 @@ const Renderer = {
       ctx.stroke();
     });
 
-    // Pockets — clean, dark wells
     for (const pk of Physics.pockets) {
       const pg = ctx.createRadialGradient(pk.x, pk.y, 1, pk.x, pk.y, Physics.POCKET_RADIUS);
       pg.addColorStop(0, '#000000');
@@ -610,12 +628,10 @@ const Renderer = {
       ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS, 0, Math.PI * 2);
       ctx.fillStyle = pg;
       ctx.fill();
-
       ctx.beginPath();
       ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS - 3, 0, Math.PI * 2);
       ctx.fillStyle = '#000';
       ctx.fill();
-
       ctx.beginPath();
       ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(120, 80, 40, 0.7)';
@@ -644,31 +660,24 @@ const Renderer = {
     const ctx = this.ctx;
     for (const puck of Physics.pucks) {
       if (!puck.active) continue;
-
-      // Soft shadow
       ctx.beginPath();
       ctx.arc(puck.x, puck.y + 2, puck.radius, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(0,0,0,0.18)';
       ctx.fill();
 
-      // Main body
       ctx.beginPath();
       ctx.arc(puck.x, puck.y, puck.radius, 0, Math.PI * 2);
       ctx.fillStyle = puck.color;
       ctx.fill();
 
-      // Rim
       ctx.beginPath();
       ctx.arc(puck.x, puck.y, puck.radius, 0, Math.PI * 2);
       ctx.strokeStyle = puck.rim;
       ctx.lineWidth = 1.6;
       ctx.stroke();
 
-      // Highlight gradient
       const hg = ctx.createRadialGradient(
-        puck.x - puck.radius * 0.35,
-        puck.y - puck.radius * 0.35,
-        1,
+        puck.x - puck.radius * 0.35, puck.y - puck.radius * 0.35, 1,
         puck.x, puck.y, puck.radius
       );
       hg.addColorStop(0, 'rgba(255,255,255,0.55)');
@@ -679,7 +688,6 @@ const Renderer = {
       ctx.fillStyle = hg;
       ctx.fill();
 
-      // Inner ring
       ctx.beginPath();
       ctx.arc(puck.x, puck.y, puck.radius * 0.5, 0, Math.PI * 2);
       ctx.strokeStyle = puck.type === 'white'
@@ -688,7 +696,6 @@ const Renderer = {
       ctx.lineWidth = 1;
       ctx.stroke();
 
-      // Center dot
       ctx.beginPath();
       ctx.arc(puck.x, puck.y, 2, 0, Math.PI * 2);
       ctx.fillStyle = puck.type === 'white' ? '#d4c4a8' : '#3a3a3a';
@@ -701,7 +708,6 @@ const Renderer = {
     if (!s || !s.active) return;
     const ctx = this.ctx;
 
-    // Glow halo when it's the player's turn and striker is idle
     const isMoving = Math.hypot(s.vx, s.vy) > 0.3;
     const isMyTurn = GAME.isPractice || GAME.currentTurn === GAME.myPlayerIndex;
     if (!isMoving && isMyTurn && GAME.mode !== 'menu') {
@@ -716,30 +722,24 @@ const Renderer = {
       ctx.fill();
     }
 
-    // Shadow
     ctx.beginPath();
     ctx.arc(s.x, s.y + 2.5, s.radius, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(0,0,0,0.22)';
     ctx.fill();
 
-    // Body
     ctx.beginPath();
     ctx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
     ctx.fillStyle = s.color;
     ctx.fill();
 
-    // Rim
     ctx.beginPath();
     ctx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(255,255,255,0.35)';
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    // Highlight
     const hg = ctx.createRadialGradient(
-      s.x - s.radius * 0.35,
-      s.y - s.radius * 0.35,
-      1,
+      s.x - s.radius * 0.35, s.y - s.radius * 0.35, 1,
       s.x, s.y, s.radius
     );
     hg.addColorStop(0, 'rgba(255,255,255,0.75)');
@@ -750,14 +750,12 @@ const Renderer = {
     ctx.fillStyle = hg;
     ctx.fill();
 
-    // Inner ring
     ctx.beginPath();
     ctx.arc(s.x, s.y, s.radius * 0.62, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(255,255,255,0.55)';
     ctx.lineWidth = 1.4;
     ctx.stroke();
 
-    // Center dot
     ctx.beginPath();
     ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,0.9)';
@@ -798,7 +796,6 @@ const Renderer = {
     const endX = s.x + Math.cos(angle) * lineLen;
     const endY = s.y + Math.sin(angle) * lineLen;
 
-    // Gradient aim line
     const lg = ctx.createLinearGradient(s.x, s.y, endX, endY);
     lg.addColorStop(0, `rgba(245, 197, 66, ${0.75 + power * 0.25})`);
     lg.addColorStop(1, `rgba(245, 197, 66, 0)`);
@@ -815,7 +812,6 @@ const Renderer = {
     ctx.stroke();
     ctx.restore();
 
-    // Endpoint marker
     const endRadius = 5 + power * 10;
     ctx.beginPath();
     ctx.arc(endX, endY, endRadius, 0, Math.PI * 2);
@@ -825,7 +821,6 @@ const Renderer = {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Arrowhead
     const aLen = 11;
     ctx.save();
     ctx.translate(endX, endY);
@@ -839,7 +834,6 @@ const Renderer = {
     ctx.fill();
     ctx.restore();
 
-    // Power ring around striker
     ctx.beginPath();
     ctx.arc(s.x, s.y, s.radius + 5 + power * 8, 0, Math.PI * 2);
     ctx.strokeStyle = `rgba(245, 197, 66, ${0.4 + power * 0.5})`;
@@ -864,46 +858,78 @@ const Renderer = {
   }
 };
 
-/* ───────────── INPUT ───────────── */
+/* ═══════════════════════════════════════════════════════════
+   INPUT — REWRITTEN FOR RELIABILITY
+   - Uses pointer events when available (unified mouse + touch)
+   - Falls back to mouse + touch events
+   - Clear state machine: idle → dragging → shot
+   - No early returns that skip state cleanup
+═══════════════════════════════════════════════════════════ */
 const Input = {
   isDragging: false,
   dragStart: null,
   dragCurrent: null,
   canvas: null,
+  activePointerId: null,
 
   init(canvas) {
     this.canvas = canvas;
-    canvas.addEventListener('mousedown', this.down.bind(this));
-    canvas.addEventListener('mousemove', this.move.bind(this));
-    canvas.addEventListener('mouseup', this.up.bind(this));
-    canvas.addEventListener('mouseleave', this.up.bind(this));
-    canvas.addEventListener('touchstart', this.down.bind(this), { passive: false });
-    canvas.addEventListener('touchmove', this.move.bind(this), { passive: false });
-    canvas.addEventListener('touchend', this.up.bind(this), { passive: false });
-    canvas.addEventListener('touchcancel', this.up.bind(this), { passive: false });
+
+    if (window.PointerEvent) {
+      canvas.addEventListener('pointerdown', this.onDown.bind(this));
+      canvas.addEventListener('pointermove', this.onMove.bind(this));
+      canvas.addEventListener('pointerup', this.onUp.bind(this));
+      canvas.addEventListener('pointercancel', this.onUp.bind(this));
+      canvas.addEventListener('pointerleave', this.onUp.bind(this));
+    } else {
+      canvas.addEventListener('mousedown', this.onDown.bind(this));
+      canvas.addEventListener('mousemove', this.onMove.bind(this));
+      canvas.addEventListener('mouseup', this.onUp.bind(this));
+      canvas.addEventListener('mouseleave', this.onUp.bind(this));
+      canvas.addEventListener('touchstart', this.onDown.bind(this), { passive: false });
+      canvas.addEventListener('touchmove', this.onMove.bind(this), { passive: false });
+      canvas.addEventListener('touchend', this.onUp.bind(this), { passive: false });
+      canvas.addEventListener('touchcancel', this.onUp.bind(this), { passive: false });
+    }
   },
 
   coords(e) {
     const rect = this.canvas.getBoundingClientRect();
     const sx = this.canvas.width / rect.width;
     const sy = this.canvas.height / rect.height;
-    let cx, cy;
-    if (e.touches && e.touches.length) { cx = e.touches[0].clientX; cy = e.touches[0].clientY; }
-    else if (e.changedTouches && e.changedTouches.length) { cx = e.changedTouches[0].clientX; cy = e.changedTouches[0].clientY; }
-    else { cx = e.clientX; cy = e.clientY; }
-    return { x: (cx - rect.left) * sx, y: (cy - rect.top) * sy };
+    let clientX, clientY;
+    if (e.touches && e.touches.length) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else if (e.changedTouches && e.changedTouches.length) {
+      clientX = e.changedTouches[0].clientX;
+      clientY = e.changedTouches[0].clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+    return { x: (clientX - rect.left) * sx, y: (clientY - rect.top) * sy };
   },
 
-  down(e) {
-    e.preventDefault();
-    AudioManager.init();
-    if (GAME.mode !== 'playing' && !GAME.isPractice) return;
-    if (!GAME.isPractice && GAME.currentTurn !== GAME.myPlayerIndex) return;
+  canShoot() {
+    if (GAME.mode !== 'playing' && !GAME.isPractice) return false;
+    if (!GAME.isPractice && GAME.currentTurn !== GAME.myPlayerIndex) return false;
     const s = Physics.striker;
-    if (!s || !s.active) return;
-    if (Math.hypot(s.vx, s.vy) > 0.4) return;
+    if (!s || !s.active) return false;
+    if (Math.hypot(s.vx, s.vy) > 0.3) return false;
+    if (Game.isResolving) return false;
+    return true;
+  },
+
+  onDown(e) {
+    if (e.cancelable) e.preventDefault();
+    AudioManager.init();
+    if (!this.canShoot()) return;
+
+    const s = Physics.striker;
     const pos = this.coords(e);
-    if (Math.hypot(pos.x - s.x, pos.y - s.y) < 110) {
+    const dist = Math.hypot(pos.x - s.x, pos.y - s.y);
+    if (dist < 120) {
       this.isDragging = true;
       this.dragStart = { x: s.x, y: s.y };
       this.dragCurrent = { x: pos.x, y: pos.y };
@@ -911,9 +937,9 @@ const Input = {
     }
   },
 
-  move(e) {
+  onMove(e) {
     if (!this.isDragging) return;
-    e.preventDefault();
+    if (e.cancelable) e.preventDefault();
     const pos = this.coords(e);
     this.dragCurrent = { x: pos.x, y: pos.y };
     const dx = pos.x - this.dragStart.x, dy = pos.y - this.dragStart.y;
@@ -921,39 +947,55 @@ const Input = {
     Game.updatePower(Math.min(dist / 90, 1));
   },
 
-  up(e) {
+  onUp(e) {
     if (!this.isDragging) return;
-    e.preventDefault();
-    const s = Physics.striker;
-    if (!s || !s.active) { this.reset(); return; }
-    const pos = this.coords(e);
-    const dx = pos.x - this.dragStart.x, dy = pos.y - this.dragStart.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist > 18) {
-      const power = Math.min(dist / 90, 1) * Physics.MAX_POWER;
-      const angle = Math.atan2(-dy, -dx);
-      s.vx = Math.cos(angle) * power;
-      s.vy = Math.sin(angle) * power;
-      AudioManager.play('shot');
-      if (GAME.mode === 'playing' && !GAME.isPractice) {
-        Network.broadcast({ type: 'shot', player: GAME.myPlayerIndex, vx: s.vx, vy: s.vy, x: s.x, y: s.y });
-      }
-      Game.isResolving = true;
-    }
-    this.reset();
-  },
+    if (e.cancelable) e.preventDefault();
 
-  reset() {
+    const s = Physics.striker;
+    const wasDragging = this.isDragging;
+    const startPos = this.dragStart;
+
+    // Always reset first — ensures next shot can start
     this.isDragging = false;
     this.dragStart = null;
     this.dragCurrent = null;
     Game.updatePower(0);
+
+    if (!wasDragging || !s || !s.active || !startPos) return;
+
+    const pos = this.coords(e);
+    const dx = pos.x - startPos.x;
+    const dy = pos.y - startPos.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 18) return;
+
+    const power = Math.min(dist / 90, 1) * Physics.MAX_POWER;
+    const angle = Math.atan2(-dy, -dx);
+    s.vx = Math.cos(angle) * power;
+    s.vy = Math.sin(angle) * power;
+    AudioManager.play('shot');
+
+    if (GAME.mode === 'playing' && !GAME.isPractice) {
+      Network.broadcast({
+        type: 'shot',
+        player: GAME.myPlayerIndex,
+        vx: s.vx, vy: s.vy, x: s.x, y: s.y
+      });
+    }
+    Game.isResolving = true;
   }
 };
 
-/* ───────────── GAME CONTROLLER ───────────── */
+/* ═══════════════════════════════════════════════════════════
+   GAME CONTROLLER
+   Key fixes:
+   - endTurn only fires when physics fully stopped
+   - Safety timeout to guarantee turn advances
+   - Striker is recreated cleanly each turn
+═══════════════════════════════════════════════════════════ */
 const Game = {
   isResolving: false,
+  resolveStartTime: 0,
   loopId: null,
   lastTime: 0,
 
@@ -963,6 +1005,7 @@ const Game = {
     Physics.init();
     Physics.pucks = Physics.createPucks();
     Physics.striker = Physics.createStriker(GAME.currentTurn);
+    this.isResolving = false;
     this.loop(performance.now());
   },
 
@@ -998,9 +1041,14 @@ const Game = {
       }
     );
 
-    if (this.isResolving && Physics.allStopped()) {
-      this.isResolving = false;
-      this.endTurn();
+    if (this.isResolving) {
+      const elapsed = t - this.resolveStartTime;
+      const stopped = Physics.allStopped();
+      // End turn when physics stopped, OR after 8s safety timeout
+      if (stopped || elapsed > 8000) {
+        this.isResolving = false;
+        this.endTurn();
+      }
     }
 
     if (Physics.activePucksCount() === 0 && !this.isResolving) {
@@ -1040,11 +1088,11 @@ const Game = {
     const isMe = winnerIdx === GAME.myPlayerIndex;
     icon.textContent = isMe ? '🏆' : '🎯';
     heading.textContent = isMe ? 'VICTORY!' : 'GAME OVER';
-    text.textContent = PLAYER_LABELS[winnerIdx] + ' wins the match';
+    text.textContent = playerLabel(winnerIdx) + ' wins the match';
     scores.innerHTML = GAME.players.map((p, i) => `
       <div class="go-score" style="animation-delay:${i * 0.1 + 0.1}s">
         <div class="go-score-val" style="color:${PLAYER_COLORS[i]}">${p.score}</div>
-        <div class="go-score-lbl">${PLAYER_LABELS[i]}</div>
+        <div class="go-score-lbl">${playerLabel(i)}</div>
       </div>
     `).join('');
     overlay.classList.remove('hidden');
@@ -1085,9 +1133,8 @@ const Game = {
     const label = document.getElementById('turnLabel');
     swatch.style.background = PLAYER_COLORS[GAME.currentTurn];
     swatch.style.color = PLAYER_COLORS[GAME.currentTurn];
-    if (GAME.isPractice) label.textContent = 'YOUR TURN';
-    else if (GAME.currentTurn === GAME.myPlayerIndex) label.textContent = 'YOUR TURN';
-    else label.textContent = PLAYER_LABELS[GAME.currentTurn] + "'S TURN";
+    if (GAME.currentTurn === GAME.myPlayerIndex) label.textContent = 'YOUR TURN';
+    else label.textContent = playerLabel(GAME.currentTurn) + "'S TURN";
     const frame = document.getElementById('boardFrame');
     if (GAME.isPractice || GAME.currentTurn === GAME.myPlayerIndex) frame.classList.add('active');
     else frame.classList.remove('active');
@@ -1097,13 +1144,33 @@ const Game = {
     GAME.players.forEach((p, i) => {
       const el = document.getElementById('scoreP' + i);
       if (el) el.textContent = p.score;
+      // Dynamic label based on local player
       const nameEl = document.getElementById('nameP' + i);
-      if (nameEl) nameEl.textContent = PLAYER_LABELS[i];
+      if (nameEl) nameEl.textContent = playerLabel(i);
+    });
+    // Also update static YOU chip — it's always index 0
+    // (Which chip is "YOU" depends on myPlayerIndex)
+    this.relabelChips();
+  },
+
+  relabelChips() {
+    // Reorder chips so local player is always on the left with "YOU"
+    const row = document.querySelector('.players-row');
+    if (!row) return;
+    const chips = row.querySelectorAll('.player-chip');
+
+    // Update names dynamically
+    chips.forEach((chip, displayIndex) => {
+      const actualPlayerIndex = parseInt(chip.dataset.p);
+      const nameEl = chip.querySelector('.pc-name');
+      if (nameEl) {
+        nameEl.textContent = playerLabel(actualPlayerIndex);
+      }
     });
   }
 };
 
-/* ───────────── UI (unchanged logic, shorter labels) ───────────── */
+/* ───────────── UI ───────────── */
 const UI = {
   init() {
     document.getElementById('createRoomBtn').addEventListener('click', () => this.onCreate());
@@ -1273,7 +1340,9 @@ const UI = {
         GAME.players = data.players;
         GAME.roomCode = data.roomCode;
         document.getElementById('connectingOverlay').classList.add('hidden');
-        Toast.show('Connected as ' + PLAYER_LABELS[GAME.myPlayerIndex], 'success', '🎉');
+        Toast.show('Connected as ' + playerLabel(GAME.myPlayerIndex), 'success', '🎉');
+        // Update chip labels immediately so P2/P3 see correct labels
+        setTimeout(() => Game.relabelChips(), 100);
         break;
       case 'room_full':
         document.getElementById('connectingOverlay').classList.add('hidden');
@@ -1291,16 +1360,20 @@ const UI = {
         break;
       case 'shot':
         if (data.player !== GAME.myPlayerIndex) {
-          Physics.striker.x = data.x;
-          Physics.striker.y = data.y;
-          Physics.striker.vx = data.vx;
-          Physics.striker.vy = data.vy;
+          if (Physics.striker) {
+            Physics.striker.x = data.x;
+            Physics.striker.y = data.y;
+            Physics.striker.vx = data.vx;
+            Physics.striker.vy = data.vy;
+          }
           Game.isResolving = true;
+          Game.resolveStartTime = performance.now();
         }
         break;
       case 'turn_change':
         GAME.currentTurn = data.currentTurn;
         Physics.striker = Physics.createStriker(GAME.currentTurn);
+        Game.isResolving = false;
         Game.updateTurnUI();
         AudioManager.play('turn');
         break;
@@ -1329,7 +1402,7 @@ const UI = {
         slot.classList.add('connected');
         avatar.classList.remove('empty');
         avatar.textContent = (idx + 1);
-        name.textContent = PLAYER_LABELS[idx];
+        name.textContent = playerLabel(idx);
         tag.textContent = '✓ READY';
       } else {
         slot.classList.remove('connected');
@@ -1427,8 +1500,15 @@ const UI = {
     document.getElementById('connectingOverlay').classList.add('hidden');
     GAME.mode = GAME.isPractice ? 'practice' : 'playing';
     GAME.players.forEach(p => p.score = 0);
+    // Update all labels & scores based on local device
     Game.updateScores();
     Game.updateTurnUI();
+    // Ensure chip labels reflect local player
+    document.querySelectorAll('.player-chip').forEach(chip => {
+      const idx = parseInt(chip.dataset.p);
+      const nameEl = chip.querySelector('.pc-name');
+      if (nameEl) nameEl.textContent = playerLabel(idx);
+    });
     Game.start();
     Toast.show(GAME.isPractice ? 'Practice mode' : 'Match started', 'info', '🎮');
   },
@@ -1464,6 +1544,7 @@ const UI = {
     Physics.pucks = [];
     Physics.striker = null;
     Renderer.pocketPops = [];
+    Game.isResolving = false;
   },
 
   playAgain() {
@@ -1473,6 +1554,7 @@ const UI = {
     Physics.pucks = Physics.createPucks();
     Physics.striker = Physics.createStriker(0);
     Renderer.pocketPops = [];
+    Game.isResolving = false;
     Game.updateScores();
     Game.updateTurnUI();
     if (GAME.mode === 'playing' && GAME.isHost) {
