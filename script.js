@@ -1,13 +1,13 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P • v11
-   • White pucks use true white with light tones
-   • Pockets are at play-corner; walls open a gap so pieces
-     can actually drop in
-   • Corner arcs drawn inside the play rectangle
-   • 2P mode: second player uses P3's baseline slot & chip
-   • Faster turn handoff (energy-based stop + snap)
-   • Keeps: striker foul −20, first to 100, quick chat,
-            aim-from-anywhere, slider skips pucks
+   CARROM 3P • v12
+   • Fixed pocket double-count (score applied once)
+   • Striker foul applied once
+   • Snap only when no puck is close to a pocket
+   • Adjust slider never lands the striker on a puck
+   • Striker pushed only along the baseline
+   • endTurn shows a single toast/sound
+   • endGame fired once
+   • 2P local: P2 uses chip #3 position & teal colour
 ═══════════════════════════════════════════════════════════ */
 
 const WIN_SCORE = 100;
@@ -38,7 +38,6 @@ const playerLabel = i => (i === GAME.myPlayerIndex) ? 'YOU' : 'P' + (i + 1);
 /* ───────── AUDIO ───────── */
 const AudioManager = {
   _ctx: null, _master: null,
-
   init() {
     if (!this._ctx) {
       try {
@@ -50,14 +49,12 @@ const AudioManager = {
     }
     if (this._ctx && this._ctx.state === 'suspended') this._ctx.resume();
   },
-
   play(type, opts = {}) {
     if (!GAME.audioEnabled || !this._ctx) return;
     const pan = Math.max(-1, Math.min(1, opts.pan ?? 0));
     const vol = opts.volume ?? 1;
     this.synth(type, pan, vol);
   },
-
   out(pan, volume) {
     const ctx = this._ctx;
     const g = ctx.createGain();
@@ -69,7 +66,6 @@ const AudioManager = {
     } else g.connect(this._master || ctx.destination);
     return g;
   },
-
   synth(type, pan, volume) {
     try {
       const ctx = this._ctx;
@@ -123,7 +119,6 @@ const AudioManager = {
       }
     } catch (e) {}
   },
-
   tone(ctx, dest, f1, f2, wave, dur, gv) {
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
@@ -137,7 +132,6 @@ const AudioManager = {
     osc.connect(gain); gain.connect(dest);
     osc.start(now); osc.stop(now + dur + 0.02);
   },
-
   noise(ctx, dest, dur, gv) {
     const now = ctx.currentTime;
     const size = Math.floor(ctx.sampleRate * dur);
@@ -150,7 +144,6 @@ const AudioManager = {
     g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
     src.connect(g); g.connect(dest); src.start(now);
   },
-
   melody(ctx, dest, notes, noteDur, gv) {
     let t = ctx.currentTime;
     notes.forEach(f => {
@@ -172,13 +165,13 @@ const Network = {
   onData: null, onError: null, onPeerJoin: null, onPeerLeave: null,
 
   generateCode() { return String(Math.floor(1000 + Math.random() * 9000)); },
-  generateClientId() { return 'c11-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
+  generateClientId() { return 'c12-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
 
   initHost(cb) {
     this.isHost = true;
     this.roomCode = this.generateCode();
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const peerId = 'c11-' + this.roomCode;
+    const peerId = 'c12-' + this.roomCode;
     return new Promise((resolve, reject) => {
       let settled = false, attempts = 0;
       const maxAttempts = 6;
@@ -225,7 +218,7 @@ const Network = {
     this.isHost = false;
     this.roomCode = roomCode;
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const hostPeerId = 'c11-' + roomCode;
+    const hostPeerId = 'c12-' + roomCode;
     const clientId = this.generateClientId();
     return new Promise((resolve, reject) => {
       let settled = false, retries = 0;
@@ -333,10 +326,6 @@ const Physics = {
   pockets: [], pucks: [], striker: null,
 
   init() {
-    /* Pockets sit exactly at the inner corners of the play rect.
-       bounds = { left: 62, top: 62, right: 638, bottom: 638 }
-       so pockets are at (62,62), (638,62), (62,638), (638,638)
-       — that way the wall "opens" and the puck can fall in. */
     const b = this.bounds();
     this.pockets = [
       { x: b.left,  y: b.top },
@@ -351,7 +340,6 @@ const Physics = {
     return { left: p, right: this.W - p, top: p, bottom: this.H - p };
   },
 
-  /* Corner-inward play rect used for the inner decorative arcs */
   innerRect() {
     const b = this.bounds();
     const off = 40;
@@ -362,7 +350,6 @@ const Physics = {
     const b = this.bounds();
     const inset = 46;
     switch (i) {
-      /* slot 0: bottom,  slot 1: left,  slot 2: top */
       case 0: return { axis: 'x', x: this.W / 2, y: b.bottom - inset, min: b.left + 76, max: b.right - 76 };
       case 1: return { axis: 'y', x: b.left + inset, y: this.H / 2, min: b.top + 76, max: b.bottom - 76 };
       case 2: return { axis: 'x', x: this.W / 2, y: b.top + inset, min: b.left + 76, max: b.right - 76 };
@@ -370,8 +357,6 @@ const Physics = {
     }
   },
 
-  /* In 2P local: player 1 (index 1) uses slot 2 (top), which is
-     visually where P3 was — that's what the user asked for. */
   slotForPlayer(playerIndex) {
     if (GAME.mode === 'local' && GAME.localMode === 'local2p') {
       return playerIndex === 0 ? 0 : 2;
@@ -382,7 +367,6 @@ const Physics = {
   createPucks() {
     const pucks = [];
     const cx = this.W / 2, cy = this.H / 2;
-    /* outer ring — WHITE (true white with soft tones) */
     for (let i = 0; i < 9; i++) {
       const a = (i / 9) * Math.PI * 2 - Math.PI / 2;
       const r = 58 + ((i % 3) - 1) * 0.6;
@@ -390,10 +374,9 @@ const Physics = {
         x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r,
         vx: 0, vy: 0, radius: this.PUCK_RADIUS,
         color: '#ffffff', rim: '#c9c9c9', cap: '#f3f3f3', innerDot: '#bdbdbd',
-        type: 'white', points: POINTS.white, active: true, trail: []
+        type: 'white', points: POINTS.white, active: true, pocketed: false, trail: []
       });
     }
-    /* inner ring — BLACK */
     for (let i = 0; i < 9; i++) {
       const a = (i / 9) * Math.PI * 2 + 0.35;
       const r = 30 + ((i % 3) - 1) * 0.5;
@@ -401,14 +384,13 @@ const Physics = {
         x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r,
         vx: 0, vy: 0, radius: this.PUCK_RADIUS,
         color: '#1a1a1a', rim: '#000', cap: '#3a3a3a', innerDot: '#cfcfcf',
-        type: 'black', points: POINTS.black, active: true, trail: []
+        type: 'black', points: POINTS.black, active: true, pocketed: false, trail: []
       });
     }
-    /* Queen (centre) — white */
     pucks.push({
       x: cx, y: cy, vx: 0, vy: 0, radius: this.PUCK_RADIUS,
       color: '#ffffff', rim: '#c9c9c9', cap: '#f3f3f3', innerDot: '#bdbdbd',
-      type: 'white', points: POINTS.white, active: true, trail: []
+      type: 'white', points: POINTS.white, active: true, pocketed: false, trail: []
     });
     return pucks;
   },
@@ -422,28 +404,37 @@ const Physics = {
     const s = {
       x, y, vx: 0, vy: 0, radius: this.STRIKER_RADIUS,
       color: PLAYER_COLORS[playerIndex],
-      type: 'striker', active: true, trail: []
+      type: 'striker', active: true, pocketed: false, trail: []
     };
-    this.separateFromPucks(s);
+    this.separateFromPucksAlongBaseline(s);
     return s;
   },
 
-  separateFromPucks(s) {
-    for (let n = 0; n < 24; n++) {
-      let anyOverlap = false;
+  /* Slide the striker only along the baseline (keeps slider in sync) */
+  separateFromPucksAlongBaseline(s) {
+    const slot = this.slotForPlayer(GAME.currentTurn);
+    const base = this.getBaseline(slot);
+    for (let n = 0; n < 30; n++) {
+      let overlap = false;
       for (const puck of this.pucks) {
         if (!puck.active) continue;
         const dx = s.x - puck.x, dy = s.y - puck.y;
         const d = Math.hypot(dx, dy);
         const minD = s.radius + puck.radius + 1;
-        if (d < minD && d > 0.01) {
-          anyOverlap = true;
-          const nx = dx / d, ny = dy / d;
-          s.x = puck.x + nx * minD;
-          s.y = puck.y + ny * minD;
+        if (d < minD) {
+          overlap = true;
+          /* Push along the baseline axis only, in the direction that increases clearance */
+          const step = (minD - d) + 0.5;
+          if (base.axis === 'x') {
+            s.x += (s.x >= puck.x ? 1 : -1) * step;
+            s.x = Math.max(base.min, Math.min(base.max, s.x));
+          } else {
+            s.y += (s.y >= puck.y ? 1 : -1) * step;
+            s.y = Math.max(base.min, Math.min(base.max, s.y));
+          }
         }
       }
-      if (!anyOverlap) return;
+      if (!overlap) return;
     }
   },
 
@@ -471,17 +462,30 @@ const Physics = {
       return null;
     };
     let r = tryPct(targetPct); if (r) return r;
-    const step = 0.01;
-    for (let d = step; d <= 1; d += step) {
+    const step = 0.005;
+    for (let d = step; d <= 2; d += step) {
       r = tryPct(targetPct + d); if (r) return r;
       r = tryPct(targetPct - d); if (r) return r;
     }
-    const clamped = Math.max(0, Math.min(1, targetPct));
-    const pos = min + span * clamped;
-    return {
-      pct: clamped,
-      x: base.axis === 'x' ? pos : base.x,
-      y: base.axis === 'x' ? base.y : pos
+    /* Fallback: walk the whole baseline and pick the safest slot */
+    let best = null, bestDist = -Infinity;
+    for (let p = 0; p <= 1.0001; p += 0.01) {
+      const clamped = Math.max(0, Math.min(1, p));
+      const pos = min + span * clamped;
+      const x = base.axis === 'x' ? pos : base.x;
+      const y = base.axis === 'x' ? base.y : pos;
+      let nearest = Infinity;
+      for (const puck of this.pucks) {
+        if (!puck.active) continue;
+        const dx = x - puck.x, dy = y - puck.y;
+        nearest = Math.min(nearest, Math.hypot(dx, dy));
+      }
+      if (nearest > bestDist) { bestDist = nearest; best = { pct: clamped, x, y }; }
+    }
+    return best || {
+      pct: Math.max(0, Math.min(1, targetPct)),
+      x: base.axis === 'x' ? min + span * targetPct : base.x,
+      y: base.axis === 'x' ? base.y : min + span * targetPct
     };
   },
 
@@ -539,7 +543,6 @@ const Physics = {
     }
   },
 
-  /* Returns true if body is close enough to a pocket to skip the wall clamp */
   nearPocket(body) {
     for (const p of this.pockets) {
       const dx = body.x - p.x, dy = body.y - p.y;
@@ -557,7 +560,6 @@ const Physics = {
     if (speed > 2.5) { body.trail.push({ x: body.x, y: body.y }); if (body.trail.length > 8) body.trail.shift(); }
     else if (body.trail.length > 0) body.trail.shift();
 
-    /* wall collision — skip clamping near pockets so the piece can fall in */
     const skipWall = this.nearPocket(body);
     let hitWall = false, wallSpeed = 0;
 
@@ -567,7 +569,6 @@ const Physics = {
       if (body.y - body.radius < bounds.top) { body.y = bounds.top + body.radius; wallSpeed = Math.max(wallSpeed, Math.abs(body.vy)); body.vy *= -this.WALL_BOUNCE; hitWall = true; }
       else if (body.y + body.radius > bounds.bottom) { body.y = bounds.bottom - body.radius; wallSpeed = Math.max(wallSpeed, Math.abs(body.vy)); body.vy *= -this.WALL_BOUNCE; hitWall = true; }
     } else {
-      /* Still block the piece from leaving the board entirely (safety net) */
       const out = 6;
       if (body.x < bounds.left - out)   { body.x = bounds.left - out; body.vx = 0; }
       if (body.x > bounds.right + out)  { body.x = bounds.right + out; body.vx = 0; }
@@ -578,19 +579,37 @@ const Physics = {
   },
 
   checkPockets(body, onPocket, isStriker) {
-    /* A piece pockets when its EDGE crosses the pocket rim.
-       Distance from piece centre to pocket centre < POCKET_RADIUS - 2
-       (a small margin so the visual is convincing without being unfair) */
+    if (body.pocketed || !body.active) return false;
     for (const p of this.pockets) {
       const dx = body.x - p.x, dy = body.y - p.y;
       const d2 = dx * dx + dy * dy;
       const hit = this.POCKET_RADIUS - 2;
       if (d2 < hit * hit) {
-        body.active = false; body.vx = 0; body.vy = 0;
+        /* Mark BEFORE callback so any re-entrant call is a no-op */
+        body.active = false;
+        body.pocketed = true;
+        body.vx = 0; body.vy = 0;
         if (onPocket) onPocket(body, p, isStriker);
         return true;
       }
     }
+    return false;
+  },
+
+  /* Is any active body close to a pocket? Used to avoid snapping a puck
+     that's about to drop. */
+  anyBodyApproachingPocket() {
+    const R = this.POCKET_RADIUS * 1.6;
+    const check = (body) => {
+      if (!body || !body.active) return false;
+      for (const p of this.pockets) {
+        const dx = body.x - p.x, dy = body.y - p.y;
+        if (dx * dx + dy * dy < R * R) return true;
+      }
+      return false;
+    };
+    if (check(this.striker)) return true;
+    for (const p of this.pucks) if (check(p)) return true;
     return false;
   },
 
@@ -601,7 +620,6 @@ const Physics = {
     return true;
   },
 
-  /* Almost dead? Snap to zero so we don't wait for the last few microns */
   almostStopped() {
     const th = this.ALMOST_STOP_SPEED;
     if (this.striker && this.striker.active && Math.hypot(this.striker.vx, this.striker.vy) > th) return false;
@@ -618,20 +636,22 @@ const Physics = {
 
   snapshot() {
     return {
-      pucks: this.pucks.map(p => ({ x: p.x, y: p.y, vx: p.vx, vy: p.vy, active: p.active })),
-      striker: this.striker ? { x: this.striker.x, y: this.striker.y, vx: this.striker.vx, vy: this.striker.vy, active: this.striker.active } : null
+      pucks: this.pucks.map(p => ({ x: p.x, y: p.y, vx: p.vx, vy: p.vy, active: p.active, pocketed: p.pocketed })),
+      striker: this.striker ? { x: this.striker.x, y: this.striker.y, vx: this.striker.vx, vy: this.striker.vy, active: this.striker.active, pocketed: this.striker.pocketed } : null
     };
   },
   applySnapshot(s) {
     if (!s) return;
     if (s.pucks) s.pucks.forEach((ps, i) => {
       const p = this.pucks[i]; if (!p) return;
-      p.x = ps.x; p.y = ps.y; p.vx = ps.vx; p.vy = ps.vy; p.active = ps.active;
+      p.x = ps.x; p.y = ps.y; p.vx = ps.vx; p.vy = ps.vy;
+      p.active = ps.active; p.pocketed = !!ps.pocketed;
     });
     if (s.striker && this.striker) {
       this.striker.x = s.striker.x; this.striker.y = s.striker.y;
       this.striker.vx = s.striker.vx; this.striker.vy = s.striker.vy;
       this.striker.active = s.striker.active;
+      this.striker.pocketed = !!s.striker.pocketed;
     }
   }
 };
@@ -665,41 +685,24 @@ const Renderer = {
     const b = Physics.bounds();
     const w = b.right - b.left, h = b.bottom - b.top;
 
-    /* Wooden frame (full square) */
     ctx.fillStyle = '#8b5a2b';
     ctx.fillRect(0, 0, this.W, this.H);
 
-    /* Fine grain lines */
     ctx.fillStyle = 'rgba(0,0,0,0.08)';
-    for (let i = 0; i < 7; i++) {
-      const y = 8 + i * 10;
-      ctx.fillRect(0, y, this.W, 1.5);
-    }
-    for (let i = 0; i < 7; i++) {
-      const y = this.H - 8 - i * 10;
-      ctx.fillRect(0, y, this.W, 1.5);
-    }
-    for (let i = 0; i < 5; i++) {
-      const x = 8 + i * 10;
-      ctx.fillRect(x, 0, 1.5, this.H);
-    }
-    for (let i = 0; i < 5; i++) {
-      const x = this.W - 8 - i * 10;
-      ctx.fillRect(x, 0, 1.5, this.H);
-    }
+    for (let i = 0; i < 7; i++) ctx.fillRect(0, 8 + i * 10, this.W, 1.5);
+    for (let i = 0; i < 7; i++) ctx.fillRect(0, this.H - 8 - i * 10, this.W, 1.5);
+    for (let i = 0; i < 5; i++) ctx.fillRect(8 + i * 10, 0, 1.5, this.H);
+    for (let i = 0; i < 5; i++) ctx.fillRect(this.W - 8 - i * 10, 0, 1.5, this.H);
 
-    /* Play surface */
     ctx.fillStyle = '#f4dcae';
     ctx.fillRect(p - 6, p - 6, w + 12, h + 12);
     ctx.fillStyle = '#f8e7c4';
     ctx.fillRect(b.left, b.top, w, h);
 
-    /* Play-surface border */
     ctx.strokeStyle = '#6b4423';
     ctx.lineWidth = 2.5;
     ctx.strokeRect(b.left + 1.25, b.top + 1.25, w - 2.5, h - 2.5);
 
-    /* Inner decorative rect — pulled INSIDE the play area */
     const ins = Physics.innerRect();
     const iw = ins.right - ins.left, ih = ins.bottom - ins.top;
     ctx.strokeStyle = '#8a5a20';
@@ -709,7 +712,6 @@ const Renderer = {
     ctx.lineWidth = 1;
     ctx.strokeRect(ins.left + 6, ins.top + 6, iw - 12, ih - 12);
 
-    /* Corner arcs, drawn inside the inner rect */
     const cornerR = 40;
     const drawArcIn = (cx, cy, s, e) => {
       ctx.beginPath();
@@ -718,12 +720,11 @@ const Renderer = {
       ctx.lineWidth = 1.6;
       ctx.stroke();
     };
-    drawArcIn(ins.left,       ins.top,        0,             Math.PI / 2);
-    drawArcIn(ins.right,      ins.top,        Math.PI / 2,   Math.PI);
-    drawArcIn(ins.right,      ins.bottom,     Math.PI,       Math.PI * 1.5);
-    drawArcIn(ins.left,       ins.bottom,     Math.PI * 1.5, Math.PI * 2);
+    drawArcIn(ins.left,  ins.top,    0,             Math.PI / 2);
+    drawArcIn(ins.right, ins.top,    Math.PI / 2,   Math.PI);
+    drawArcIn(ins.right, ins.bottom, Math.PI,       Math.PI * 1.5);
+    drawArcIn(ins.left,  ins.bottom, Math.PI * 1.5, Math.PI * 2);
 
-    /* Centre circle + sun */
     ctx.beginPath();
     ctx.arc(this.W / 2, this.H / 2, 74, 0, Math.PI * 2);
     ctx.strokeStyle = '#8a5a20';
@@ -749,29 +750,24 @@ const Renderer = {
     ctx.fillStyle = '#8a5a20';
     ctx.fill();
 
-    /* Baseline sight rings for each active player, drawn inside the
-       inner rect corners so nothing pokes outside the box */
-    const slotCount = GAME.mode === 'local' && GAME.localMode === 'local2p' ? 2 : GAME.activePlayers;
-    const slots = [];
+    /* Base-line sight rings */
+    const is2P = GAME.mode === 'local' && GAME.localMode === 'local2p';
+    const slotCount = is2P ? 2 : GAME.activePlayers;
     for (let pi = 0; pi < slotCount; pi++) {
       const slot = Physics.slotForPlayer(pi);
       const base = Physics.getBaseline(slot);
       const mid = (base.min + base.max) / 2;
       const x = base.axis === 'x' ? mid : base.x;
       const y = base.axis === 'x' ? base.y : mid;
-      slots.push({ x, y, color: PLAYER_COLORS[pi] });
-    }
-    slots.forEach(bp => {
       ctx.beginPath();
-      ctx.arc(bp.x, bp.y, 10, 0, Math.PI * 2);
-      ctx.strokeStyle = bp.color;
+      ctx.arc(x, y, 10, 0, Math.PI * 2);
+      ctx.strokeStyle = PLAYER_COLORS[pi];
       ctx.lineWidth = 1.6;
       ctx.globalAlpha = 0.45;
       ctx.stroke();
       ctx.globalAlpha = 1;
-    });
+    }
 
-    /* Pockets — drawn at play corners */
     for (const pk of Physics.pockets) {
       ctx.beginPath();
       ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS + 3, 0, Math.PI * 2);
@@ -841,42 +837,30 @@ const Renderer = {
       ctx.fillStyle = 'rgba(80, 55, 20, 0.18)';
       ctx.fill();
 
-      /* body */
       ctx.beginPath(); ctx.arc(puck.x, puck.y, r, 0, Math.PI * 2);
       ctx.fillStyle = puck.color; ctx.fill();
-
-      /* outer rim */
       ctx.beginPath(); ctx.arc(puck.x, puck.y, r - 0.4, 0, Math.PI * 2);
       ctx.strokeStyle = puck.rim; ctx.lineWidth = 1.4; ctx.stroke();
 
-      /* mid ring */
       ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.66, 0, Math.PI * 2);
       ctx.strokeStyle = puck.type === 'white' ? '#c0c0c0' : '#3a3a3a';
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
+      ctx.lineWidth = 1.2; ctx.stroke();
 
-      /* cap */
       ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.42, 0, Math.PI * 2);
-      ctx.fillStyle = puck.cap;
-      ctx.fill();
+      ctx.fillStyle = puck.cap; ctx.fill();
       ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.42, 0, Math.PI * 2);
       ctx.strokeStyle = puck.type === 'white' ? '#b8b8b8' : '#1a1a1a';
-      ctx.lineWidth = 0.9;
-      ctx.stroke();
+      ctx.lineWidth = 0.9; ctx.stroke();
 
-      /* centre dot */
       ctx.beginPath(); ctx.arc(puck.x, puck.y, 2, 0, Math.PI * 2);
-      ctx.fillStyle = puck.innerDot;
-      ctx.fill();
+      ctx.fillStyle = puck.innerDot; ctx.fill();
 
-      /* highlight arc */
       ctx.beginPath();
       ctx.arc(puck.x, puck.y, r * 0.85, Math.PI * 1.15, Math.PI * 1.55);
       ctx.strokeStyle = puck.type === 'white'
         ? 'rgba(255,255,255,0.95)'
         : 'rgba(255,255,255,0.22)';
-      ctx.lineWidth = 1.6;
-      ctx.stroke();
+      ctx.lineWidth = 1.6; ctx.stroke();
     }
   },
 
@@ -895,8 +879,7 @@ const Renderer = {
       ctx.arc(s.x, s.y, r + 6 + pulse * 2, 0, Math.PI * 2);
       ctx.strokeStyle = s.color;
       ctx.globalAlpha = 0.35 + pulse * 0.25;
-      ctx.lineWidth = 2;
-      ctx.stroke();
+      ctx.lineWidth = 2; ctx.stroke();
       ctx.globalAlpha = 1;
     }
 
@@ -908,18 +891,15 @@ const Renderer = {
     ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
     ctx.fillStyle = s.color; ctx.fill();
     ctx.beginPath(); ctx.arc(s.x, s.y, r - 0.6, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-    ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1.5; ctx.stroke();
 
     ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.72, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-    ctx.lineWidth = 1.4; ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 1.4; ctx.stroke();
 
     ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.5, 0, Math.PI * 2);
     ctx.fillStyle = '#ffffff'; ctx.fill();
     ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.5, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
-    ctx.lineWidth = 1; ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 1; ctx.stroke();
 
     ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.22, 0, Math.PI * 2);
     ctx.fillStyle = s.color; ctx.fill();
@@ -973,8 +953,7 @@ const Renderer = {
     ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(endX, endY);
     ctx.strokeStyle = '#d99a10';
     ctx.globalAlpha = 0.9;
-    ctx.lineWidth = 3.2;
-    ctx.stroke();
+    ctx.lineWidth = 3.2; ctx.stroke();
     ctx.globalAlpha = 1;
     ctx.restore();
 
@@ -1106,7 +1085,7 @@ const Input = {
 const Game = {
   isResolving: false, resolveStartTime: 0, loopId: null, lastTime: 0,
   turnHadFoul: false, turnPocketed: 0, ended: false,
-  _lastNetTick: 0, _lastRollSound: 0,
+  _lastNetTick: 0, _lastRollSound: 0, _ending: false,
 
   start() {
     Renderer.init();
@@ -1118,6 +1097,7 @@ const Game = {
     this.turnHadFoul = false;
     this.turnPocketed = 0;
     this.ended = false;
+    this._ending = false;
     this.updateAdjustSlider();
     this.updateWaitBar();
     this.lastTime = performance.now();
@@ -1140,32 +1120,7 @@ const Game = {
         else if (intensity > 0.35) AudioManager.play('puck_hit_med', { pan, volume: Math.min(intensity + 0.15, 0.9) });
         else AudioManager.play('puck_hit_soft', { pan, volume: Math.min(intensity + 0.3, 0.8) });
       },
-      (body, pocket, isStriker) => {
-        const pan = (body.x / Physics.W) * 2 - 1;
-        Renderer.addPocketPop(pocket.x, pocket.y, body.color);
-        if (isStriker) {
-          AudioManager.play('striker_pocket', { pan });
-          this.turnHadFoul = true;
-          const idx = GAME.currentTurn;
-          GAME.players[idx].score = Math.max(0, GAME.players[idx].score + STRIKER_FOUL);
-          FloatingText.spawn(pocket.x, pocket.y - 20, `${STRIKER_FOUL}`, '#dc2626');
-          Toast.show(`Foul! Striker pocketed · ${STRIKER_FOUL} pts`, 'error', '⚠');
-          this.updateScores();
-          if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
-            Network.broadcast({ type: 'score_update', playerIndex: idx, score: GAME.players[idx].score });
-          }
-        } else {
-          AudioManager.play('puck_pocket', { pan });
-          const pts = body.points || 0;
-          GAME.players[GAME.currentTurn].score += pts;
-          this.turnPocketed++;
-          this.updateScores();
-          FloatingText.spawn(pocket.x, pocket.y - 20, `+${pts}`, PLAYER_COLORS[GAME.currentTurn]);
-          if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
-            Network.broadcast({ type: 'score_update', playerIndex: GAME.currentTurn, score: GAME.players[GAME.currentTurn].score });
-          }
-        }
-      },
+      (body, pocket, isStriker) => this.handlePocket(body, pocket, isStriker),
       (body, wallSpeed) => {
         const pan = (body.x / Physics.W) * 2 - 1;
         const v = Math.min(wallSpeed / 14, 1);
@@ -1186,8 +1141,8 @@ const Game = {
 
     if (this.isResolving) {
       const elapsed = t - this.resolveStartTime;
-      /* If everything is almost dead, snap to stop and end the turn immediately. */
-      if (Physics.almostStopped()) {
+      /* Snap only if no body is close to a pocket (so we don't freeze a dropping puck) */
+      if (Physics.almostStopped() && !Physics.anyBodyApproachingPocket()) {
         Physics.snapAll();
       }
       const fullyStopped = Physics.allStopped();
@@ -1233,6 +1188,40 @@ const Game = {
     this.loopId = requestAnimationFrame(this.loop.bind(this));
   },
 
+  /* Centralised pocket handler — runs exactly once per body */
+  handlePocket(body, pocket, isStriker) {
+    const pan = (body.x / Physics.W) * 2 - 1;
+    Renderer.addPocketPop(pocket.x, pocket.y, body.color);
+
+    if (isStriker) {
+      AudioManager.play('striker_pocket', { pan });
+      this.turnHadFoul = true;
+      const idx = GAME.currentTurn;
+      GAME.players[idx].score = Math.max(0, GAME.players[idx].score + STRIKER_FOUL);
+      FloatingText.spawn(pocket.x, pocket.y - 20, `${STRIKER_FOUL}`, '#dc2626');
+      Toast.show(`Foul! Striker pocketed · ${STRIKER_FOUL} pts`, 'error', '⚠');
+      this.updateScores();
+      if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
+        Network.broadcast({ type: 'score_update', playerIndex: idx, score: GAME.players[idx].score });
+      }
+      return;
+    }
+
+    AudioManager.play('puck_pocket', { pan });
+    const pts = body.points || 0;
+    GAME.players[GAME.currentTurn].score += pts;
+    this.turnPocketed++;
+    this.updateScores();
+    FloatingText.spawn(pocket.x, pocket.y - 20, `+${pts}`, PLAYER_COLORS[GAME.currentTurn]);
+    if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
+      Network.broadcast({
+        type: 'score_update',
+        playerIndex: GAME.currentTurn,
+        score: GAME.players[GAME.currentTurn].score
+      });
+    }
+  },
+
   checkWinner() {
     for (let i = 0; i < GAME.activePlayers; i++) {
       if (GAME.players[i].score >= WIN_SCORE) return i;
@@ -1244,11 +1233,14 @@ const Game = {
     const foul = this.turnHadFoul;
     const scored = this.turnPocketed > 0;
 
-    if (foul) AudioManager.play('turn_pass');
-    else if (scored) {
+    if (foul) {
+      AudioManager.play('turn_pass');
+    } else if (scored) {
       Toast.show('Nice! Play again', 'success', '✦');
       AudioManager.play('second_chance');
-    } else AudioManager.play('turn');
+    } else {
+      AudioManager.play('turn');
+    }
 
     const keepTurn = !foul && scored;
     this.turnHadFoul = false;
@@ -1267,6 +1259,8 @@ const Game = {
   },
 
   endGame(winnerIdx) {
+    if (this._ending) return;
+    this._ending = true;
     AudioManager.play('win');
     this.confetti();
     if (winnerIdx === -1) {
@@ -1326,7 +1320,6 @@ const Game = {
   },
 
   updateTurnUI() {
-    /* In 2P local mode, chip 3 is reused as P2, and chip 2 is hidden. */
     const is2P = GAME.mode === 'local' && GAME.localMode === 'local2p';
     const chips = document.querySelectorAll('.player-chip');
     chips.forEach((c, i) => {
@@ -1334,20 +1327,17 @@ const Game = {
       if (is2P) visible = (i === 0 || i === 2);
       c.classList.toggle('hidden-chip', !visible);
       c.classList.toggle('active', i === GAME.currentTurn);
-      if (is2P && i === 2) {
-        /* P2 uses purple chip with teal accent so it's still readable */
-        const dot = c.querySelector('.pc-dot');
-        const nameEl = c.querySelector('.pc-name');
-        if (dot) dot.style.background = PLAYER_COLORS[1];
-        if (nameEl) nameEl.textContent = 'P2';
+      const dot = c.querySelector('.pc-dot');
+      const nameEl = c.querySelector('.pc-name');
+      if (is2P) {
+        if (i === 0) { if (dot) dot.style.background = PLAYER_COLORS[0]; if (nameEl) nameEl.textContent = 'YOU'; }
+        else if (i === 2) { if (dot) dot.style.background = PLAYER_COLORS[1]; if (nameEl) nameEl.textContent = 'P2'; }
       } else {
-        const dot = c.querySelector('.pc-dot');
         if (dot) dot.style.background = PLAYER_COLORS[i];
-        const nameEl = c.querySelector('.pc-name');
         if (nameEl) {
           if (i === 0) nameEl.textContent = 'YOU';
-          else if (i === 2 && !is2P) nameEl.textContent = 'P3';
-          else if (i === 1) nameEl.textContent = 'P2';
+          else if (i === 2) nameEl.textContent = 'P3';
+          else nameEl.textContent = 'P2';
         }
       }
     });
@@ -1839,6 +1829,8 @@ const UI = {
     Game.updateScores();
     Game.updateTurnUI();
     Game.start();
+    /* Ensure the 2P chip visibility is applied after the game starts */
+    Game.updateTurnUI();
     Toast.show(
       GAME.localMode === 'local2p' ? '2P Local mode' :
       GAME.localMode === 'practice3p' ? '3P Local mode' :
@@ -1878,6 +1870,7 @@ const UI = {
     FloatingText.items = [];
     Game.isResolving = false;
     Game.ended = false;
+    Game._ending = false;
     document.querySelectorAll('.confetti').forEach(el => el.remove());
   },
 
@@ -1891,6 +1884,7 @@ const UI = {
     FloatingText.items = [];
     Game.isResolving = false;
     Game.ended = false;
+    Game._ending = false;
     Game.updateScores(); Game.updateTurnUI(); Game.updateAdjustSlider(); Game.updateWaitBar();
     if (!fromRemote && GAME.mode === 'playing') {
       if (GAME.isHost) Network.broadcast({ type: 'play_again' });
