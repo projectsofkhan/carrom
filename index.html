@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#0a0e17">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#ffffff">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800;900&family=Space+Mono:wght@700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-  <link rel="stylesheet" href="style.css?v=7">
+  <link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
 
@@ -159,16 +159,33 @@
         </svg>
       </button>
       <div class="top-center"><span class="live-dot"></span><span>LIVE</span></div>
-      <button class="top-btn" id="soundToggle" aria-label="Sound">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="soundOnIcon">
-          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-          <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
-        </svg>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="soundOffIcon" style="display:none">
-          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-          <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
-        </svg>
-      </button>
+      <div class="topbar-right">
+        <!-- QUICK CHAT BUTTON -->
+        <button class="top-btn chat-toggle" id="chatToggle" aria-label="Chat">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+          </svg>
+        </button>
+        <button class="top-btn" id="soundToggle" aria-label="Sound">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="soundOnIcon">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+          </svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="soundOffIcon" style="display:none">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+            <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+          </svg>
+        </button>
+        <!-- CHAT DROPDOWN -->
+        <div class="chat-menu" id="chatMenu">
+          <div class="chat-menu-head">QUICK CHAT</div>
+          <button class="chat-item" data-msg="Great Shot!">Great Shot!</button>
+          <button class="chat-item" data-msg="Cool!">Cool!</button>
+          <button class="chat-item" data-msg="Nice Try!">Nice Try!</button>
+          <button class="chat-item" data-msg="Thanks!">Thanks!</button>
+          <button class="chat-item" data-msg="Oof!">Oof!</button>
+        </div>
+      </div>
     </div>
 
     <div class="players-row">
@@ -193,6 +210,15 @@
           <div class="pc-score" id="scoreP2">0</div>
         </div>
       </div>
+    </div>
+
+    <!-- POINTS LEGEND -->
+    <div class="legend-row">
+      <span class="legend-item"><span class="legend-dot legend-white"></span>White · 20 pts</span>
+      <span class="legend-sep">•</span>
+      <span class="legend-item"><span class="legend-dot legend-black"></span>Black · 10 pts</span>
+      <span class="legend-sep">•</span>
+      <span class="legend-item legend-hint">Pot to play again</span>
     </div>
 
     <div class="board-wrap">
@@ -224,14 +250,6 @@
       <span class="turn-label" id="turnLabel">Your turn</span>
     </div>
 
-    <div class="reactions-row">
-      <button class="reaction" data-msg="Great Shot!">Great Shot!</button>
-      <button class="reaction" data-msg="Cool!">Cool!</button>
-      <button class="reaction" data-msg="Nice Try!">Nice Try!</button>
-      <button class="reaction" data-msg="Thanks!">Thanks!</button>
-      <button class="reaction" data-msg="Oof!">Oof!</button>
-    </div>
-
     <div id="gameOverOverlay" class="gameover hidden">
       <div class="go-box">
         <div class="go-icon" id="goIcon">🏆</div>
@@ -246,6 +264,6 @@
 
   <div id="toastContainer" class="toast-container"></div>
   <div id="chatLayer" class="chat-layer"></div>
-  <script src="script.js?v=7"></script>
+  <script src="script.js?v=8"></script>
 </body>
 </html>
