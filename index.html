@@ -1,143 +1,373 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Class 10 Urdu MCQs</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0a0e17">
+  <meta name="description" content="3-Player Freestyle Carrom - Play with friends online">
+  <title>Carrom 3P • Freestyle</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  
+  <!-- PeerJS for P2P -->
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  
+  <!-- Howler for sounds -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/howler/2.2.4/howler.min.js"></script>
+  
+  <!-- Styles -->
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <!-- Language Toggle Button -->
-    <div class="language-toggle">
-        <button id="langToggle" class="lang-btn">
-            <i class="fas fa-language"></i>
-            <span id="langText">Urdu Mode</span>
-        </button>
+  
+  <!-- ═══════════════════════════════════════════
+       LOADING SCREEN
+  ═══════════════════════════════════════════ -->
+  <div id="loadingScreen" class="loading-screen">
+    <div class="loading-content">
+      <div class="loading-logo">
+        <div class="logo-ring"></div>
+        <div class="logo-ring"></div>
+        <div class="logo-ring"></div>
+        <div class="logo-core">
+          <span>3</span>
+        </div>
+      </div>
+      <h1 class="loading-title">CARROM</h1>
+      <p class="loading-subtitle">FREESTYLE • 3 PLAYER</p>
+      <div class="loading-bar-wrap">
+        <div class="loading-bar" id="loadingBar"></div>
+      </div>
+      <p class="loading-status" id="loadingStatus">Initializing...</p>
     </div>
+  </div>
 
-    <!-- Header -->
-    <header class="header">
-        <div class="app-header">
-            <h1><i class="fas fa-book-open"></i> Class 10 Urdu MCQs</h1>
-            <p class="subtitle">Nawa-e-Urdu Book Part 2</p>
+  <!-- ═══════════════════════════════════════════
+       MAIN MENU
+  ═══════════════════════════════════════════ -->
+  <div id="mainMenu" class="main-menu hidden">
+    <div class="menu-bg-particles" id="menuParticles"></div>
+    
+    <div class="menu-container">
+      <!-- Logo -->
+      <div class="menu-header">
+        <div class="brand-badge">
+          <div class="brand-icon">
+            <div class="brand-circle c1"></div>
+            <div class="brand-circle c2"></div>
+            <div class="brand-circle c3"></div>
+          </div>
+          <span class="brand-text">3P</span>
         </div>
-        
-        <div class="app-info">
-            <div class="info-card">
-                <i class="fas fa-book"></i>
-                <div>
-                    <h3>Nawa-e-Urdu</h3>
-                    <p>Part 2 - All Chapters</p>
-                </div>
-            </div>
-            <div class="info-card">
-                <i class="fas fa-question-circle"></i>
-                <div>
-                    <h3>40 Questions</h3>
-                    <p>Grammar + Chapters</p>
-                </div>
-            </div>
+        <h1 class="game-title">
+          <span class="title-letter" style="--i:0">C</span>
+          <span class="title-letter" style="--i:1">A</span>
+          <span class="title-letter" style="--i:2">R</span>
+          <span class="title-letter" style="--i:3">R</span>
+          <span class="title-letter" style="--i:4">O</span>
+          <span class="title-letter" style="--i:5">M</span>
+        </h1>
+        <p class="game-subtitle">PLAY WITH FRIENDS • NO RED QUEEN</p>
+      </div>
+
+      <!-- Menu Cards -->
+      <div class="menu-cards">
+        <!-- Host -->
+        <button class="menu-card host-card" id="hostBtn">
+          <div class="card-glow"></div>
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+              <path d="M2 17l10 5 10-5"/>
+              <path d="M2 12l10 5 10-5"/>
+            </svg>
+          </div>
+          <div class="card-content">
+            <h3>HOST GAME</h3>
+            <p>Create a room & invite friends</p>
+          </div>
+          <div class="card-arrow">→</div>
+        </button>
+
+        <!-- Join -->
+        <button class="menu-card join-card" id="joinBtn">
+          <div class="card-glow"></div>
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+              <polyline points="10 17 15 12 10 7"/>
+              <line x1="15" y1="12" x2="3" y2="12"/>
+            </svg>
+          </div>
+          <div class="card-content">
+            <h3>JOIN GAME</h3>
+            <p>Enter a room code to play</p>
+          </div>
+          <div class="card-arrow">→</div>
+        </button>
+
+        <!-- Practice -->
+        <button class="menu-card practice-card" id="practiceBtn">
+          <div class="card-glow"></div>
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <circle cx="12" cy="12" r="4"/>
+            </svg>
+          </div>
+          <div class="card-content">
+            <h3>PRACTICE SOLO</h3>
+            <p>Test your shot without friends</p>
+          </div>
+          <div class="card-arrow">→</div>
+        </button>
+      </div>
+
+      <!-- Footer -->
+      <div class="menu-footer">
+        <div class="footer-pill">
+          <span class="dot dot-green"></span>
+          <span>P2P CONNECTED</span>
         </div>
+        <div class="footer-pill">
+          <span class="dot dot-yellow"></span>
+          <span>v3.0 FREESTYLE</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       HOST MODAL
+  ═══════════════════════════════════════════ -->
+  <div id="hostModal" class="modal-overlay hidden">
+    <div class="modal-content">
+      <button class="modal-close" id="hostModalClose">✕</button>
+      <div class="modal-icon host-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+          <path d="M2 17l10 5 10-5"/>
+        </svg>
+      </div>
+      <h2 class="modal-title">HOSTING GAME</h2>
+      <p class="modal-desc">Share this code with your friends</p>
+      
+      <div class="room-code-display">
+        <div class="code-label">ROOM CODE</div>
+        <div class="code-value" id="hostRoomCode">------</div>
+        <button class="copy-btn" id="copyCodeBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          COPY
+        </button>
+      </div>
+
+      <div class="players-waiting" id="waitingPlayers">
+        <div class="waiting-title">PLAYERS (<span id="playerCount">1</span>/3)</div>
+        <div class="waiting-list" id="waitingList">
+          <div class="waiting-player slot-filled">
+            <div class="wp-color" style="background:#e63946"></div>
+            <span>YOU (Host)</span>
+            <div class="wp-status ready">READY</div>
+          </div>
+          <div class="waiting-player slot-empty">
+            <div class="wp-color empty"></div>
+            <span>Waiting...</span>
+            <div class="wp-status">—</div>
+          </div>
+          <div class="waiting-player slot-empty">
+            <div class="wp-color empty"></div>
+            <span>Waiting...</span>
+            <div class="wp-status">—</div>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn-primary" id="startGameBtn" disabled>
+        <span>START GAME</span>
+        <div class="btn-shine"></div>
+      </button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       JOIN MODAL
+  ═══════════════════════════════════════════ -->
+  <div id="joinModal" class="modal-overlay hidden">
+    <div class="modal-content">
+      <button class="modal-close" id="joinModalClose">✕</button>
+      <div class="modal-icon join-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+          <polyline points="10 17 15 12 10 7"/>
+          <line x1="15" y1="12" x2="3" y2="12"/>
+        </svg>
+      </div>
+      <h2 class="modal-title">JOIN GAME</h2>
+      <p class="modal-desc">Enter the room code from your friend</p>
+      
+      <div class="code-input-wrap">
+        <input type="text" id="joinCodeInput" class="code-input" maxlength="6" placeholder="------" autocomplete="off" spellcheck="false">
+        <div class="code-input-hint">6 CHARACTERS</div>
+      </div>
+
+      <button class="btn-primary" id="connectBtn">
+        <span>CONNECT</span>
+        <div class="btn-shine"></div>
+      </button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       CONNECTING OVERLAY
+  ═══════════════════════════════════════════ -->
+  <div id="connectingOverlay" class="connecting-overlay hidden">
+    <div class="connecting-content">
+      <div class="connecting-spinner">
+        <div class="spinner-ring"></div>
+        <div class="spinner-ring"></div>
+        <div class="spinner-ring"></div>
+      </div>
+      <p class="connecting-text" id="connectingText">Connecting to room...</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════
+       GAME SCREEN
+  ═══════════════════════════════════════════ -->
+  <div id="gameScreen" class="game-screen hidden">
+    
+    <!-- Game Header -->
+    <header class="game-header">
+      <button class="header-btn back-btn" id="backBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="15 18 9 12 15 6"/>
+        </svg>
+      </button>
+      
+      <div class="header-center">
+        <div class="game-mode-badge" id="gameModeBadge">
+          <span class="dot-live"></span>
+          <span id="gameModeText">LIVE MATCH</span>
+        </div>
+      </div>
+      
+      <button class="header-btn sound-btn" id="soundToggle">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="soundOnIcon">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+        </svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="soundOffIcon" style="display:none">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+          <line x1="23" y1="9" x2="17" y2="15"/>
+          <line x1="17" y1="9" x2="23" y2="15"/>
+        </svg>
+      </button>
     </header>
 
-    <!-- Progress Bar -->
-    <div class="mobile-progress">
-        <div class="progress-top">
-            <span id="progressText">Q 1/40</span>
-            <span id="progressPercent">0%</span>
+    <!-- Players Scoreboard -->
+    <div class="scoreboard" id="scoreboard">
+      <div class="score-card p1-card active" data-player="0">
+        <div class="sc-color" style="background:#e63946"></div>
+        <div class="sc-info">
+          <div class="sc-name">YOU</div>
+          <div class="sc-score" id="scoreP0">0</div>
         </div>
-        <div class="progress-bar-container">
-            <div class="progress-bar" id="progressBar"></div>
+        <div class="sc-turn-badge">TURN</div>
+      </div>
+      <div class="score-card p2-card" data-player="1">
+        <div class="sc-color" style="background:#2a9d8f"></div>
+        <div class="sc-info">
+          <div class="sc-name" id="nameP1">WAITING</div>
+          <div class="sc-score" id="scoreP1">0</div>
         </div>
+        <div class="sc-turn-badge">TURN</div>
+      </div>
+      <div class="score-card p3-card" data-player="2">
+        <div class="sc-color" style="background:#9c6ade"></div>
+        <div class="sc-info">
+          <div class="sc-name" id="nameP2">WAITING</div>
+          <div class="sc-score" id="scoreP2">0</div>
+        </div>
+        <div class="sc-turn-badge">TURN</div>
+      </div>
     </div>
 
-    <!-- MCQ Container -->
-    <main class="mcq-container" id="mcqContainer">
-        <!-- Questions loaded dynamically -->
-    </main>
-
-    <!-- Navigation -->
-    <!-- Navigation with Topics -->
-<div class="mobile-nav" id="mobileNav">
-    <!-- Topic navigation will be dynamically added here -->
-</div>
-
-    <!-- Submit Button -->
-    <div class="submit-section">
-        <button id="submitBtn" class="submit-btn">
-            <i class="fas fa-paper-plane"></i> Submit Test
-        </button>
+    <!-- Board Area -->
+    <div class="board-area">
+      <div class="board-frame">
+        <div class="board-decor top-left"></div>
+        <div class="board-decor top-right"></div>
+        <div class="board-decor bottom-left"></div>
+        <div class="board-decor bottom-right"></div>
+        <canvas id="gameCanvas" width="700" height="700"></canvas>
+        <div class="board-glow"></div>
+      </div>
     </div>
 
-    <!-- Questions List Modal -->
-    <div class="modal" id="questionsModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>All Questions</h2>
-                <button class="close-modal">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="questions-grid" id="questionsGrid">
-                    <!-- Questions list -->
-                </div>
-            </div>
+    <!-- Power Meter -->
+    <div class="power-meter-wrap" id="powerMeterWrap">
+      <div class="power-meter-label">POWER</div>
+      <div class="power-meter" id="powerMeter">
+        <div class="power-fill" id="powerFill"></div>
+        <div class="power-markers">
+          <span></span><span></span><span></span><span></span><span></span>
         </div>
+      </div>
     </div>
 
-    <!-- Results Modal -->
-    <div class="modal" id="resultsModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2><i class="fas fa-trophy"></i> Test Result</h2>
-                <button class="close-modal">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="result-score">
-                    <div class="score-circle">
-                        <span id="finalScore">0%</span>
-                    </div>
-                    <h3 id="resultTitle">Good Job!</h3>
-                </div>
-                
-                <div class="result-stats">
-                    <div class="stat-item">
-                        <span class="stat-label">Total Questions</span>
-                        <span class="stat-value">40</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Correct</span>
-                        <span id="finalCorrect">0</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Wrong</span>
-                        <span id="finalWrong">0</span>
-                    </div>
-                    <div class="stat-item">
-                        <span class="stat-label">Skipped</span>
-                        <span id="finalSkipped">0</span>
-                    </div>
-                </div>
-                
-                <div class="result-actions">
-                    <button id="reviewBtn" class="action-btn">
-                        <i class="fas fa-redo"></i> Review
-                    </button>
-                    <button id="restartBtn" class="action-btn restart">
-                        <i class="fas fa-sync-alt"></i> Restart
-                    </button>
-                </div>
-            </div>
+    <!-- Turn Indicator -->
+    <div class="turn-indicator-wrap" id="turnIndicatorWrap">
+      <div class="turn-swatch" id="turnSwatch"></div>
+      <span class="turn-text" id="turnText">YOUR TURN</span>
+    </div>
+
+    <!-- Game Over Overlay -->
+    <div id="gameOverOverlay" class="game-over-overlay hidden">
+      <div class="game-over-content">
+        <div class="go-trophy">🏆</div>
+        <h2 class="go-title" id="goTitle">VICTORY!</h2>
+        <p class="go-subtitle" id="goSubtitle">Player wins the match</p>
+        <div class="go-stats" id="goStats"></div>
+        <div class="go-actions">
+          <button class="btn-primary" id="playAgainBtn">
+            <span>PLAY AGAIN</span>
+            <div class="btn-shine"></div>
+          </button>
+          <button class="btn-secondary" id="goMainMenuBtn">
+            <span>MAIN MENU</span>
+          </button>
         </div>
+      </div>
     </div>
 
-    <!-- Footer -->
-    <footer class="footer">
-        <p>Class 10 Urdu MCQs • Based on Nawa-e-Urdu Part 2 • Grammar • And More Topics.</p>
-        <p class="footer-note">Created by Sir Zeeshan Khan</p>
-    </footer>
+    <!-- Reaction Bar -->
+    <div class="reaction-bar" id="reactionBar">
+      <button class="reaction-btn" data-emoji="👏">👏</button>
+      <button class="reaction-btn" data-emoji="🔥">🔥</button>
+      <button class="reaction-btn" data-emoji="😎">😎</button>
+      <button class="reaction-btn" data-emoji="😱">😱</button>
+      <button class="reaction-btn" data-emoji="🎯">🎯</button>
+      <button class="reaction-btn" data-emoji="💪">💪</button>
+    </div>
+  </div>
 
-    <script src="mcq.js"></script>
-    <script src="script.js"></script>
+  <!-- ═══════════════════════════════════════════
+       FLOATING NOTIFICATIONS
+  ═══════════════════════════════════════════ -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- ═══════════════════════════════════════════
+       EMOJI FLOAT LAYER
+  ═══════════════════════════════════════════ -->
+  <div id="emojiLayer" class="emoji-layer"></div>
+
+  <!-- Scripts -->
+  <script src="script.js"></script>
 </body>
 </html>
