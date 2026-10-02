@@ -1,16 +1,13 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P • LIVE MULTIPLAYER EDITION
-   
-   ARCHITECTURE:
-   - HOST is authoritative for turn changes & scores
-   - Clients broadcast their SHOT (velocity vector) 
-   - All devices simulate physics locally from the same shot
-   - Striker position syncs on every adjust
-   - Emoji chat broadcasts both ways
-   
-   INPUT MODES:
-   - Slider: moves striker along baseline (only on your turn)
-   - Board drag: aims + fires (finger must lift INSIDE board)
+   CARROM 3P • v5
+   Changes:
+   - Pocket radius = 3× puck radius (45)
+   - Striker radius = 2× puck radius (30)
+   - MAX_POWER = 16 (more force)
+   - Aim works even if finger leaves board (only lift matters)
+   - Wait message bar BELOW board (board stays clear)
+   - Quick-chat text messages instead of emojis
+   - No caching (cache-bust query strings)
 ═══════════════════════════════════════════════════════════ */
 
 const GAME = {
@@ -35,7 +32,7 @@ function playerLabel(i) {
   return (i === GAME.myPlayerIndex) ? 'YOU' : 'P' + (i + 1);
 }
 
-/* ───────────── AUDIO ───────────── */
+/* AUDIO */
 const AudioManager = {
   _ctx: null,
   init() {
@@ -137,15 +134,7 @@ const AudioManager = {
   }
 };
 
-/* ═══════════════════════════════════════════════════════════
-   NETWORK — Live multiplayer via PeerJS
-   
-   Key fixes:
-   1. Client waits for host's 'welcome' before considering itself connected
-   2. Host always assigns slot; no double-assign
-   3. All messages have a 'from' field for clarity
-   4. Striker moves broadcast with throttling
-═══════════════════════════════════════════════════════════ */
+/* NETWORK — same proven pattern */
 const Network = {
   peer: null,
   connections: [],
@@ -159,7 +148,6 @@ const Network = {
   generateCode() { return String(Math.floor(1000 + Math.random() * 9000)); },
   generateClientId() { return 'c3p-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
 
-  /* Host: create room, wait for open */
   initHost(cb) {
     this.isHost = true;
     this.roomCode = this.generateCode();
@@ -179,7 +167,6 @@ const Network = {
         attempts++;
         try {
           if (this.peer) { try { this.peer.destroy(); } catch(e) {} this.peer = null; }
-
           this.peer = new Peer(peerId, {
             debug: 0,
             config: { iceServers: [
@@ -189,14 +176,12 @@ const Network = {
               { urls: 'stun:stun2.l.google.com:19302' }
             ] }
           });
-
           const timeout = setTimeout(() => {
             if (settled) return;
             if (attempts >= maxAttempts) { settled = true; reject(new Error('host-timeout')); return; }
             this.roomCode = this.generateCode();
             tryCreate();
           }, 8000);
-
           this.peer.on('open', () => {
             if (settled) return;
             settled = true;
@@ -204,11 +189,8 @@ const Network = {
             AudioManager.play('connect');
             resolve(this.roomCode);
           });
-
           this.peer.on('connection', conn => this.setupConnection(conn));
-
           this.peer.on('error', err => {
-            // unavailable-id → code collision, retry with new code
             if (err.type === 'unavailable-id') {
               clearTimeout(timeout);
               if (settled) return;
@@ -219,20 +201,13 @@ const Network = {
             if (!settled) { settled = true; clearTimeout(timeout); reject(err); }
             else if (this.onError) this.onError(err);
           });
-
-          this.peer.on('disconnected', () => {
-            try { this.peer.reconnect(); } catch(e) {}
-          });
-        } catch(e) {
-          if (!settled) { settled = true; reject(e); }
-        }
+          this.peer.on('disconnected', () => { try { this.peer.reconnect(); } catch(e) {} });
+        } catch(e) { if (!settled) { settled = true; reject(e); } }
       };
-
       tryCreate();
     });
   },
 
-  /* Client: connect to a host room */
   initClient(roomCode, cb) {
     this.isHost = false;
     this.roomCode = roomCode;
@@ -253,7 +228,6 @@ const Network = {
         retries++;
         try {
           if (this.peer) { try { this.peer.destroy(); } catch(e) {} this.peer = null; }
-
           this.peer = new Peer(clientId + '-r' + retries, {
             debug: 0,
             config: { iceServers: [
@@ -263,45 +237,30 @@ const Network = {
               { urls: 'stun:stun2.l.google.com:19302' }
             ] }
           });
-
           const attemptTimeout = setTimeout(() => {
             if (settled) return;
-            if (retries >= maxRetries) {
-              settled = true;
-              reject(new Error('client-timeout'));
-            } else {
-              tryConnect();
-            }
+            if (retries >= maxRetries) { settled = true; reject(new Error('client-timeout')); }
+            else tryConnect();
           }, 15000);
-
           this.peer.on('open', () => {
-            // Connect to host
             const conn = this.peer.connect(hostPeerId, { reliable: true });
-
             conn.on('open', () => {
               if (settled) return;
               settled = true;
               clearTimeout(attemptTimeout);
-
               if (!this.connections.includes(conn)) this.connections.push(conn);
-
-              // Attach listeners
               conn.on('data', data => { if (this.onData) this.onData(data, conn); });
               conn.on('close', () => {
                 this.connections = this.connections.filter(c => c !== conn);
                 if (this.onPeerLeave) this.onPeerLeave(conn);
               });
               conn.on('error', err => console.error('conn error:', err));
-
-              // Send hello (host replies with welcome)
               setTimeout(() => {
                 try { conn.send({ type: 'hello' }); } catch(e) {}
               }, 100);
-
               AudioManager.play('connect');
               resolve(conn);
             });
-
             conn.on('error', err => {
               if (!settled) {
                 clearTimeout(attemptTimeout);
@@ -310,7 +269,6 @@ const Network = {
               }
             });
           });
-
           this.peer.on('error', err => {
             if (err.type === 'peer-unavailable') {
               clearTimeout(attemptTimeout);
@@ -328,16 +286,12 @@ const Network = {
             if (!settled) { settled = true; clearTimeout(attemptTimeout); reject(err); }
             else if (this.onError) this.onError(err);
           });
-
-          this.peer.on('disconnected', () => {
-            try { this.peer.reconnect(); } catch(e) {}
-          });
+          this.peer.on('disconnected', () => { try { this.peer.reconnect(); } catch(e) {} });
         } catch(e) {
           if (retries < maxRetries) setTimeout(() => tryConnect(), 500);
           else if (!settled) { settled = true; reject(e); }
         }
       };
-
       tryConnect();
     });
   },
@@ -348,14 +302,11 @@ const Network = {
       AudioManager.play('connect');
       if (this.onPeerJoin) this.onPeerJoin(conn);
     });
-
     conn.on('data', data => { if (this.onData) this.onData(data, conn); });
-
     conn.on('close', () => {
       this.connections = this.connections.filter(c => c !== conn);
       if (this.onPeerLeave) this.onPeerLeave(conn);
     });
-
     conn.on('error', err => console.error('host conn error:', err));
   },
 
@@ -364,33 +315,32 @@ const Network = {
       if (c.open) { try { c.send(data); } catch(e) {} }
     });
   },
-
   sendTo(conn, data) {
     if (conn && conn.open) { try { conn.send(data); } catch(e) {} }
   },
-
   disconnect() {
-    if (this.peer) {
-      try { this.peer.destroy(); } catch(e) {}
-      this.peer = null;
-    }
+    if (this.peer) { try { this.peer.destroy(); } catch(e) {} this.peer = null; }
     this.connections = [];
   }
 };
 
 /* ═══════════════════════════════════════════════════════════
    PHYSICS
+   - Puck radius 15
+   - Striker radius 30 (2× puck)
+   - Pocket radius 45 (3× puck)
+   - MAX_POWER 16 (more force)
 ═══════════════════════════════════════════════════════════ */
 const Physics = {
   W: 700, H: 700,
   BOARD_PADDING: 62,
   PUCK_RADIUS: 15,
-  STRIKER_RADIUS: 18,
-  POCKET_RADIUS: 22,
+  STRIKER_RADIUS: 30,
+  POCKET_RADIUS: 45,
   FRICTION: 0.983,
   WALL_BOUNCE: 0.74,
   MIN_SPEED: 0.06,
-  MAX_POWER: 11,
+  MAX_POWER: 16,
   RESTITUTION: 0.9,
 
   pockets: [], pucks: [], striker: null,
@@ -408,11 +358,10 @@ const Physics = {
     return { left: p, right: this.W - p, top: p, bottom: this.H - p };
   },
 
-  /* Baseline for a player:
-     P0 bottom (x-axis), P1 left (y-axis), P2 top (x-axis) */
   getBaseline(playerIndex) {
     const p = this.BOARD_PADDING;
-    const inset = 42;
+    // Move baseline outward so bigger striker doesn't overlap pockets
+    const inset = 48;
     switch(playerIndex) {
       case 0: return { axis: 'x', x: this.W / 2, y: this.H - p - inset,
                        min: p + 80, max: this.W - p - 80 };
@@ -505,7 +454,7 @@ const Physics = {
     const invA = 1 / a.radius;
     const invB = 1 / b.radius;
     const j = -(1 + this.RESTITUTION) * vn / (invA + invB);
-    const clampedJ = Math.max(-8, Math.min(8, j));
+    const clampedJ = Math.max(-14, Math.min(14, j));
     const ix = clampedJ * nx, iy = clampedJ * ny;
     a.vx -= ix * invA; a.vy -= iy * invA;
     b.vx += ix * invB; b.vy += iy * invB;
@@ -567,7 +516,9 @@ const Physics = {
   checkPockets(body, onPocket, isStriker) {
     for (const p of this.pockets) {
       const dx = body.x - p.x, dy = body.y - p.y;
-      if (dx * dx + dy * dy < (this.POCKET_RADIUS - 3) * (this.POCKET_RADIUS - 3)) {
+      // Puck center must reach pocket center within pocket radius minus a bit
+      const threshold = this.POCKET_RADIUS - body.radius * 0.4;
+      if (dx * dx + dy * dy < threshold * threshold) {
         body.active = false; body.vx = 0; body.vy = 0;
         if (onPocket) onPocket(body, p, isStriker);
         return true;
@@ -589,9 +540,7 @@ const Physics = {
   activePucksCount() { return this.pucks.filter(p => p.active).length; }
 };
 
-/* ═══════════════════════════════════════════════════════════
-   RENDERER
-═══════════════════════════════════════════════════════════ */
+/* RENDERER */
 const Renderer = {
   canvas: null, ctx: null,
   W: 700, H: 700,
@@ -699,13 +648,13 @@ const Renderer = {
       ctx.fillStyle = pg;
       ctx.fill();
       ctx.beginPath();
-      ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS - 3, 0, Math.PI * 2);
+      ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS - 4, 0, Math.PI * 2);
       ctx.fillStyle = '#000';
       ctx.fill();
       ctx.beginPath();
       ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(120, 80, 40, 0.7)';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.5;
       ctx.stroke();
     }
   },
@@ -720,7 +669,7 @@ const Renderer = {
     const ctx = this.ctx;
     ctx.save();
     ctx.strokeStyle = PLAYER_COLORS[GAME.currentTurn] + '55';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2.5;
     ctx.setLineDash([6, 8]);
     ctx.lineDashOffset = -this.time * 30;
     ctx.beginPath();
@@ -808,8 +757,8 @@ const Renderer = {
     if (!isMoving && isMyTurn && GAME.mode !== 'menu') {
       const pulse = 0.5 + Math.sin(this.time * 4) * 0.5;
       ctx.beginPath();
-      ctx.arc(s.x, s.y, s.radius + 8, 0, Math.PI * 2);
-      const grd = ctx.createRadialGradient(s.x, s.y, s.radius, s.x, s.y, s.radius + 8);
+      ctx.arc(s.x, s.y, s.radius + 10, 0, Math.PI * 2);
+      const grd = ctx.createRadialGradient(s.x, s.y, s.radius, s.x, s.y, s.radius + 10);
       grd.addColorStop(0, s.color + '00');
       grd.addColorStop(0.5, s.color + Math.floor((0.3 + pulse * 0.3) * 255).toString(16).padStart(2, '0'));
       grd.addColorStop(1, s.color + '00');
@@ -818,7 +767,7 @@ const Renderer = {
     }
 
     ctx.beginPath();
-    ctx.arc(s.x, s.y + 2.5, s.radius, 0, Math.PI * 2);
+    ctx.arc(s.x, s.y + 3, s.radius, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(0,0,0,0.22)';
     ctx.fill();
 
@@ -830,7 +779,7 @@ const Renderer = {
     ctx.beginPath();
     ctx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 2;
     ctx.stroke();
 
     const hg = ctx.createRadialGradient(
@@ -848,11 +797,11 @@ const Renderer = {
     ctx.beginPath();
     ctx.arc(s.x, s.y, s.radius * 0.62, 0, Math.PI * 2);
     ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-    ctx.lineWidth = 1.4;
+    ctx.lineWidth = 2;
     ctx.stroke();
 
     ctx.beginPath();
-    ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2);
+    ctx.arc(s.x, s.y, 3.5, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255,255,255,0.9)';
     ctx.fill();
   },
@@ -886,9 +835,9 @@ const Renderer = {
     const dist = Math.hypot(dx, dy);
     if (dist < 14) return;
 
-    const power = Math.min(dist / 90, 1);
+    const power = Math.min(dist / 120, 1);
     const angle = Math.atan2(-dy, -dx);
-    const lineLen = 90 + power * 200;
+    const lineLen = 100 + power * 220;
     const endX = s.x + Math.cos(angle) * lineLen;
     const endY = s.y + Math.sin(angle) * lineLen;
 
@@ -931,7 +880,7 @@ const Renderer = {
     ctx.restore();
 
     ctx.beginPath();
-    ctx.arc(s.x, s.y, s.radius + 5 + power * 8, 0, Math.PI * 2);
+    ctx.arc(s.x, s.y, s.radius + 6 + power * 8, 0, Math.PI * 2);
     ctx.strokeStyle = `rgba(245, 197, 66, ${0.4 + power * 0.5})`;
     ctx.lineWidth = 2;
     ctx.stroke();
@@ -954,10 +903,7 @@ const Renderer = {
   }
 };
 
-/* ═══════════════════════════════════════════════════════════
-   INPUT — Board drag = AIM ONLY. No striker touch.
-   Shot fires only when finger lifts INSIDE the board.
-═══════════════════════════════════════════════════════════ */
+/* INPUT — aim works anywhere, shooting only if lift inside board */
 const Input = {
   isAiming: false,
   aimStart: null,
@@ -969,7 +915,7 @@ const Input = {
     canvas.addEventListener('mousedown', this.onDown.bind(this));
     canvas.addEventListener('mousemove', this.onMove.bind(this));
     canvas.addEventListener('mouseup', this.onUp.bind(this));
-    canvas.addEventListener('mouseleave', this.onCancel.bind(this));
+    canvas.addEventListener('mouseleave', this.onLeave.bind(this));
     canvas.addEventListener('touchstart', this.onDown.bind(this), { passive: false });
     canvas.addEventListener('touchmove', this.onMove.bind(this), { passive: false });
     canvas.addEventListener('touchend', this.onUp.bind(this), { passive: false });
@@ -1008,7 +954,6 @@ const Input = {
     if (!this.canShoot()) return;
     const pos = this.coords(e);
     if (!this.isInsideBoard(pos)) return;
-    // Any touch inside the board starts an aim gesture
     this.isAiming = true;
     this.aimStart = { x: pos.x, y: pos.y };
     this.aimCurrent = { x: pos.x, y: pos.y };
@@ -1022,7 +967,13 @@ const Input = {
     this.aimCurrent = { x: pos.x, y: pos.y };
     const dx = pos.x - this.aimStart.x, dy = pos.y - this.aimStart.y;
     const dist = Math.hypot(dx, dy);
-    Game.updatePower(Math.min(dist / 90, 1));
+    Game.updatePower(Math.min(dist / 120, 1));
+  },
+
+  /* Mouse left the canvas — keep aiming but hide the shot when released */
+  onLeave(e) {
+    // Don't reset — user might still lift inside board
+    // Nothing to do here; onUp handles final decision
   },
 
   onUp(e) {
@@ -1030,7 +981,6 @@ const Input = {
     if (e.cancelable) e.preventDefault();
 
     const start = this.aimStart;
-    // Reset FIRST — guarantees next gesture works
     this.isAiming = false;
     this.aimStart = null;
     this.aimCurrent = null;
@@ -1039,7 +989,6 @@ const Input = {
     if (!start) return;
 
     const pos = this.coords(e);
-    // CRITICAL: only shoot if finger lifts INSIDE the board
     if (!this.isInsideBoard(pos)) {
       AudioManager.play('click');
       return;
@@ -1052,13 +1001,12 @@ const Input = {
     const dist = Math.hypot(dx, dy);
     if (dist < 18) return;
 
-    const power = Math.min(dist / 90, 1) * Physics.MAX_POWER;
+    const power = Math.min(dist / 120, 1) * Physics.MAX_POWER;
     const angle = Math.atan2(-dy, -dx);
     s.vx = Math.cos(angle) * power;
     s.vy = Math.sin(angle) * power;
     AudioManager.play('shot');
 
-    // Broadcast shot: everyone plays it locally
     if (GAME.mode === 'playing' && !GAME.isPractice) {
       Network.broadcast({
         type: 'shot',
@@ -1083,9 +1031,7 @@ const Input = {
   }
 };
 
-/* ═══════════════════════════════════════════════════════════
-   GAME CONTROLLER
-═══════════════════════════════════════════════════════════ */
+/* GAME CONTROLLER */
 const Game = {
   isResolving: false,
   resolveStartTime: 0,
@@ -1100,7 +1046,7 @@ const Game = {
     Physics.striker = Physics.createStriker(GAME.currentTurn, 0.5);
     this.isResolving = false;
     this.updateAdjustSlider();
-    this.updateWaitOverlay();
+    this.updateWaitBar();
     this.loop(performance.now());
   },
 
@@ -1126,7 +1072,6 @@ const Game = {
           if (GAME.mode === 'playing' || GAME.isPractice) {
             GAME.players[GAME.currentTurn].score++;
             this.updateScores();
-            // Host broadcasts score update
             if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
               Network.broadcast({
                 type: 'score_update',
@@ -1151,12 +1096,6 @@ const Game = {
         this.isResolving = false;
         if (GAME.mode === 'playing' && !GAME.isPractice && !GAME.isHost) {
           // Clients wait for host's turn_change message
-          // But if it doesn't come (host disconnected), advance locally after 1s
-          setTimeout(() => {
-            if (!Game.isResolving && GAME.mode === 'playing' && GAME.currentTurn !== GAME.myPlayerIndex) {
-              // Host never sent turn_change — advance anyway
-            }
-          }, 1000);
         } else {
           this.endTurn();
         }
@@ -1181,7 +1120,7 @@ const Game = {
     }
     this.updateTurnUI();
     this.updateAdjustSlider();
-    this.updateWaitOverlay();
+    this.updateWaitBar();
     AudioManager.play('turn');
   },
 
@@ -1276,7 +1215,6 @@ const Game = {
     thumb.style.left = (pct * 100) + '%';
     fill.style.width = (pct * 100) + '%';
 
-    // Bind drag once
     if (!track.dataset.bound) {
       track.dataset.bound = '1';
       let isDraggingSlider = false;
@@ -1299,7 +1237,6 @@ const Game = {
         thumb.style.left = (pct * 100) + '%';
         fill.style.width = (pct * 100) + '%';
 
-        // Broadcast position (throttled)
         if (GAME.mode === 'playing' && !GAME.isPractice) {
           const now = performance.now();
           if (now - (Input._lastMoveBroadcast || 0) > 60) {
@@ -1330,7 +1267,6 @@ const Game = {
       window.addEventListener('pointerup', () => {
         if (!isDraggingSlider) return;
         isDraggingSlider = false;
-        // Final broadcast
         if (GAME.mode === 'playing' && !GAME.isPractice && Physics.striker) {
           Network.broadcast({
             type: 'striker_move',
@@ -1341,7 +1277,6 @@ const Game = {
         }
       });
 
-      // Touch fallback
       track.addEventListener('touchstart', e => {
         e.preventDefault();
         AudioManager.init();
@@ -1370,18 +1305,17 @@ const Game = {
     }
   },
 
-  updateWaitOverlay() {
-    const overlay = document.getElementById('waitOverlay');
-    const title = document.getElementById('waitTitle');
-    const sub = document.getElementById('waitSub');
+  /* NEW: Wait bar below board instead of overlay */
+  updateWaitBar() {
+    const bar = document.getElementById('waitBar');
+    const text = document.getElementById('waitBarText');
     const isMyTurn = GAME.isPractice || GAME.currentTurn === GAME.myPlayerIndex;
     if (isMyTurn || GAME.mode === 'menu') {
-      overlay.classList.add('hidden');
+      bar.classList.add('hidden');
       return;
     }
-    overlay.classList.remove('hidden');
-    title.textContent = 'WAIT...';
-    sub.textContent = playerLabel(GAME.currentTurn) + ' is playing';
+    bar.classList.remove('hidden');
+    text.textContent = playerLabel(GAME.currentTurn) + ' is playing...';
   },
 
   updateScores() {
@@ -1399,7 +1333,7 @@ const Game = {
   }
 };
 
-/* ───────────── UI ───────────── */
+/* UI */
 const UI = {
   init() {
     document.getElementById('createRoomBtn').addEventListener('click', () => this.onCreate());
@@ -1416,7 +1350,7 @@ const UI = {
     document.getElementById('playAgainBtn').addEventListener('click', () => this.playAgain());
     document.getElementById('goMenuBtn').addEventListener('click', () => this.goMenu());
     document.querySelectorAll('.reaction').forEach(btn => {
-      btn.addEventListener('click', () => this.sendReaction(btn.dataset.emoji));
+      btn.addEventListener('click', () => this.sendMessage(btn.dataset.msg));
     });
     this.setupDigitInputs();
   },
@@ -1500,7 +1434,6 @@ const UI = {
       document.getElementById('hostStatus').textContent = '✓ READY';
       Toast.show('Room #' + code + ' created', 'success', '✅');
     } catch(err) {
-      console.warn('Host create failed:', err);
       Toast.show('Failed to create room', 'error', '❌');
       document.getElementById('hostStatus').textContent = '✕ FAILED';
       setTimeout(() => this.closeModal('createModal'), 1500);
@@ -1535,11 +1468,7 @@ const UI = {
     this.enterGame();
   },
 
-  /* Called when host receives an incoming DataConnection */
-  onPeerJoin(conn) {
-    if (!GAME.isHost) return;
-    // Slot assigned only after 'hello' received
-  },
+  onPeerJoin(conn) {},
 
   onPeerLeave(conn) {
     if (!GAME.isHost) return;
@@ -1556,13 +1485,9 @@ const UI = {
   onData(data, conn) {
     switch(data.type) {
       case 'hello':
-        // Host receives hello → assign slot → send welcome
         if (!GAME.isHost) return;
         const slot = GAME.players.findIndex((p, i) => i > 0 && !p.connected);
-        if (slot < 0) {
-          Network.sendTo(conn, { type: 'room_full' });
-          return;
-        }
+        if (slot < 0) { Network.sendTo(conn, { type: 'room_full' }); return; }
         GAME.players[slot].connected = true;
         GAME.players[slot].id = conn.peer;
         Network.sendTo(conn, {
@@ -1629,7 +1554,7 @@ const UI = {
         Game.isResolving = false;
         Game.updateTurnUI();
         Game.updateAdjustSlider();
-        Game.updateWaitOverlay();
+        Game.updateWaitBar();
         AudioManager.play('turn');
         break;
 
@@ -1640,9 +1565,9 @@ const UI = {
         }
         break;
 
-      case 'reaction':
+      case 'chat_message':
         if (data.player !== GAME.myPlayerIndex) {
-          this.showReaction(data.emoji);
+          this.showMessage(data.text);
         }
         break;
 
@@ -1733,7 +1658,6 @@ const UI = {
         onPeerJoin: (c) => this.onPeerJoin(c),
         onPeerLeave: (c) => this.onPeerLeave(c)
       });
-      // Wait for host's 'welcome' message to arrive
       setTimeout(() => {
         const overlay = document.getElementById('connectingOverlay');
         if (!overlay.classList.contains('hidden')) {
@@ -1819,30 +1743,31 @@ const UI = {
     Game.updateScores();
     Game.updateTurnUI();
     Game.updateAdjustSlider();
-    Game.updateWaitOverlay();
+    Game.updateWaitBar();
     if (!fromRemote && GAME.mode === 'playing' && GAME.isHost) {
       Network.broadcast({ type: 'play_again' });
     }
   },
 
-  sendReaction(emoji) {
+  /* CHAT MESSAGES (replacing emojis) */
+  sendMessage(text) {
     AudioManager.play('click');
-    this.showReaction(emoji);
+    this.showMessage(text);
     if (GAME.mode === 'playing' && !GAME.isPractice) {
-      Network.broadcast({ type: 'reaction', emoji, player: GAME.myPlayerIndex });
+      Network.broadcast({ type: 'chat_message', text, player: GAME.myPlayerIndex });
     }
   },
 
-  showReaction(emoji) {
-    const layer = document.getElementById('emojiLayer');
+  showMessage(text) {
+    const layer = document.getElementById('chatLayer');
     const el = document.createElement('div');
-    el.className = 'floating-emoji';
-    el.textContent = emoji;
-    el.style.left = (15 + Math.random() * 70) + '%';
-    el.style.bottom = '120px';
-    el.style.animationDuration = (2.4 + Math.random() * 0.8) + 's';
+    el.className = 'chat-bubble';
+    el.textContent = text;
+    el.style.left = (15 + Math.random() * 55) + '%';
+    el.style.bottom = '140px';
+    el.style.animationDuration = (2.4 + Math.random() * 0.6) + 's';
     layer.appendChild(el);
-    setTimeout(() => el.remove(), 3400);
+    setTimeout(() => el.remove(), 3200);
     if (GAME.audioEnabled) AudioManager.play('notification', { volume: 0.3 });
   },
 
