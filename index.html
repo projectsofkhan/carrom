@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800;900&family=Space+Mono:wght@700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-  <link rel="stylesheet" href="style.css?v=6">
+  <link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 
@@ -44,20 +44,20 @@
       </div>
       <div class="menu-actions">
         <button class="action-primary create-action" id="createRoomBtn">
-          <span class="ap-icon">＋</span>
-          <span class="ap-label">CREATE ROOM</span>
+          <span class="ap-icon">+</span>
+          <span class="ap-label">Create Room</span>
           <span class="ap-arrow">→</span>
         </button>
         <button class="action-primary join-action" id="joinRoomBtn">
           <span class="ap-icon">⌂</span>
-          <span class="ap-label">JOIN ROOM</span>
+          <span class="ap-label">Join Room</span>
           <span class="ap-arrow">→</span>
         </button>
         <button class="action-secondary" id="practiceBtn">
-          <span>PRACTICE SOLO</span>
+          <span>Practice Solo</span>
         </button>
       </div>
-      <div class="menu-footer"><span class="live-dot"></span><span>READY TO PLAY</span></div>
+      <div class="menu-footer"><span class="live-dot"></span><span>READY</span></div>
     </div>
   </div>
 
@@ -69,7 +69,7 @@
         <div class="you-avatar" style="background:#e63946"><span>1</span></div>
         <div class="you-info">
           <div class="you-name">YOU</div>
-          <div class="you-status" id="hostStatus">✓ READY</div>
+          <div class="you-status" id="hostStatus">Ready</div>
         </div>
       </div>
       <div class="invite-divider"><span>INVITE 2 FRIENDS</span></div>
@@ -77,14 +77,14 @@
         <div class="friend-slot" data-slot="2">
           <div class="fs-avatar empty">2</div>
           <div class="fs-info">
-            <span class="fs-name">Waiting...</span>
+            <span class="fs-name">Waiting…</span>
             <span class="fs-tag">Not connected</span>
           </div>
         </div>
         <div class="friend-slot" data-slot="3">
           <div class="fs-avatar empty">3</div>
           <div class="fs-info">
-            <span class="fs-name">Waiting...</span>
+            <span class="fs-name">Waiting…</span>
             <span class="fs-tag">Not connected</span>
           </div>
         </div>
@@ -109,9 +109,9 @@
           <span>SHARE INVITE LINK</span>
         </button>
       </div>
-      <div class="waiting-hint" id="waitingHint">Waiting for friends to join...</div>
+      <div class="waiting-hint" id="waitingHint">Waiting for friends to join…</div>
       <button class="start-btn" id="startGameBtn" disabled>
-        <span id="startBtnText">NEED 2 MORE PLAYERS</span>
+        <span id="startBtnText">NEED 2 MORE</span>
       </button>
     </div>
   </div>
@@ -146,21 +146,20 @@
   <div id="connectingOverlay" class="connecting-overlay hidden">
     <div class="connecting-inner">
       <div class="connecting-dots"><span></span><span></span><span></span></div>
-      <p id="connectingText">Connecting...</p>
+      <p id="connectingText">Connecting…</p>
     </div>
   </div>
 
   <!-- GAME -->
   <div id="gameScreen" class="game-screen hidden">
-
     <div class="game-topbar">
-      <button class="top-btn" id="backBtn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <button class="top-btn" id="backBtn" aria-label="Back">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
           <polyline points="15 18 9 12 15 6"/>
         </svg>
       </button>
-      <div class="top-center"><span class="live-dot"></span><span id="gameModeText">LIVE</span></div>
-      <button class="top-btn" id="soundToggle">
+      <div class="top-center"><span class="live-dot"></span><span>LIVE</span></div>
+      <button class="top-btn" id="soundToggle" aria-label="Sound">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="soundOnIcon">
           <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
           <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
@@ -204,11 +203,11 @@
 
     <div class="wait-bar hidden" id="waitBar">
       <span class="wb-dot"></span>
-      <span class="wb-text" id="waitBarText">P2 is playing...</span>
+      <span class="wb-text" id="waitBarText">P2 is playing…</span>
     </div>
 
     <div class="adjust-row hidden" id="adjustRow">
-      <span class="adjust-label">MOVE</span>
+      <span class="adjust-label">POS</span>
       <div class="adjust-track" id="adjustTrack">
         <div class="adjust-fill" id="adjustFill"></div>
         <div class="adjust-thumb" id="adjustThumb"></div>
@@ -231,13 +230,12 @@
       <button class="reaction" data-msg="Nice Try!">Nice Try!</button>
       <button class="reaction" data-msg="Thanks!">Thanks!</button>
       <button class="reaction" data-msg="Oof!">Oof!</button>
-      <button class="reaction" data-msg="Lucky!">Lucky!</button>
     </div>
 
     <div id="gameOverOverlay" class="gameover hidden">
       <div class="go-box">
         <div class="go-icon" id="goIcon">🏆</div>
-        <h2 class="go-heading" id="goHeading">VICTORY!</h2>
+        <h2 class="go-heading" id="goHeading">VICTORY</h2>
         <p class="go-text" id="goText">Player wins</p>
         <div class="go-scores" id="goScores"></div>
         <button class="start-btn" id="playAgainBtn"><span>PLAY AGAIN</span></button>
@@ -248,6 +246,6 @@
 
   <div id="toastContainer" class="toast-container"></div>
   <div id="chatLayer" class="chat-layer"></div>
-  <script src="script.js?v=6"></script>
+  <script src="script.js?v=7"></script>
 </body>
 </html>
