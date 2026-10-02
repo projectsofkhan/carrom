@@ -1,8 +1,9 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P FREESTYLE • MAIN SCRIPT
+   CARROM 3P FREESTYLE • MAIN SCRIPT (FIXED P2P)
    - Host creates room via CREATE ROOM button
    - Friends join via JOIN ROOM button (4-digit code)
-   - Room codes are 4-digit NUMBERS only
+   - FIX: Client now waits for actual DataConnection open
+   - FIX: Extended timeout, better retries, no false negatives
 ═══════════════════════════════════════════════════════════ */
 
 const GAME = {
@@ -132,10 +133,15 @@ const AudioManager = {
   }
 };
 
-/* ─────────────────────────────────────────────
-   NETWORK — 4-digit room codes
-   Peer ID = "c3p-NNNN"
-───────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════
+   NETWORK — FIXED VERSION
+   Key changes:
+   1. initClient resolves ONLY when DataConnection actually opens
+   2. Retry logic for slow connections
+   3. Host properly tracks multiple connections
+   4. Uses explicit peer IDs for clients too (prevents ID clashes)
+   5. Extended timeouts for slow networks
+═══════════════════════════════════════════════════════════ */
 const Network = {
   peer: null,
   connections: [],
@@ -147,10 +153,17 @@ const Network = {
   onError: null,
 
   generateCode() {
-    // 4-digit code, 1000-9999 (always 4 digits, no leading zero issues)
     return String(Math.floor(1000 + Math.random() * 9000));
   },
 
+  generateClientId() {
+    // Unique client ID to prevent clashes between multiple joiners
+    return 'c3p-client-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now();
+  },
+
+  /* ─────────────────────────────────────────
+     HOST — creates room, listens for joiners
+  ───────────────────────────────────────── */
   initHost(cb) {
     this.isHost = true;
     this.roomCode = this.generateCode();
@@ -162,50 +175,84 @@ const Network = {
     const peerId = 'c3p-' + this.roomCode;
 
     return new Promise((resolve, reject) => {
-      try {
-        this.peer = new Peer(peerId, {
-          debug: 1,
-          config: {
-            iceServers: [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' },
-              { urls: 'stun:global.stun.twilio.com:3478' }
-            ]
-          }
-        });
+      let settled = false;
+      let attempts = 0;
+      const maxAttempts = 5;
 
-        let settled = false;
-        const timeout = setTimeout(() => {
-          if (!settled) { settled = true; reject(new Error('timeout')); }
-        }, 15000);
+      const tryCreate = () => {
+        attempts++;
+        try {
+          this.peer = new Peer(peerId, {
+            debug: 1,
+            config: {
+              iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:global.stun.twilio.com:3478' },
+                { urls: 'stun:stun2.l.google.com:19302' }
+              ]
+            }
+          });
 
-        this.peer.on('open', () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timeout);
-          AudioManager.play('connect');
-          resolve(this.roomCode);
-        });
+          const timeout = setTimeout(() => {
+            if (settled) return;
+            if (attempts >= maxAttempts) {
+              settled = true;
+              reject(new Error('host-timeout'));
+              return;
+            }
+            try { this.peer.destroy(); } catch(e) {}
+            this.roomCode = this.generateCode();
+            tryCreate();
+          }, 10000);
 
-        this.peer.on('connection', conn => this.setupConnection(conn));
-
-        this.peer.on('error', err => {
-          if (err.type === 'unavailable-id') {
-            // Retry with a new code
+          this.peer.on('open', () => {
             if (settled) return;
             settled = true;
             clearTimeout(timeout);
-            try { this.peer.destroy(); } catch(e) {}
-            this.initHost(cb).then(resolve).catch(reject);
-            return;
-          }
-          if (!settled) { settled = true; clearTimeout(timeout); reject(err); }
-          else if (this.onError) this.onError(err);
-        });
-      } catch(e) { reject(e); }
+            AudioManager.play('connect');
+            resolve(this.roomCode);
+          });
+
+          this.peer.on('connection', conn => this.setupConnection(conn));
+
+          this.peer.on('error', err => {
+            console.warn('Host peer error:', err.type, err);
+            if (err.type === 'unavailable-id') {
+              // Room code collision — pick new one
+              clearTimeout(timeout);
+              if (settled) return;
+              try { this.peer.destroy(); } catch(e) {}
+              this.roomCode = this.generateCode();
+              tryCreate();
+              return;
+            }
+            if (!settled) {
+              settled = true;
+              clearTimeout(timeout);
+              reject(err);
+            } else if (this.onError) {
+              this.onError(err);
+            }
+          });
+
+          this.peer.on('disconnected', () => {
+            console.warn('Host disconnected, reconnecting...');
+            try { this.peer.reconnect(); } catch(e) {}
+          });
+        } catch(e) {
+          if (!settled) { settled = true; reject(e); }
+        }
+      };
+
+      tryCreate();
     });
   },
 
+  /* ─────────────────────────────────────────
+     CLIENT — joins an existing room
+     FIXED: resolves only when DataConnection is OPEN
+  ───────────────────────────────────────── */
   initClient(roomCode, cb) {
     this.isHost = false;
     this.roomCode = roomCode;
@@ -215,55 +262,179 @@ const Network = {
     this.onPlayerLeave = cb.onPlayerLeave;
 
     const hostPeerId = 'c3p-' + roomCode;
+    const clientId = this.generateClientId();
 
     return new Promise((resolve, reject) => {
-      try {
-        this.peer = new Peer({
-          debug: 1,
-          config: {
-            iceServers: [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' }
-            ]
+      let settled = false;
+      let retries = 0;
+      const maxRetries = 3;
+
+      const tryConnect = () => {
+        retries++;
+        try {
+          // Create a fresh peer for each retry attempt
+          if (this.peer) {
+            try { this.peer.destroy(); } catch(e) {}
+            this.peer = null;
           }
-        });
 
-        let settled = false;
-        const timeout = setTimeout(() => {
-          if (!settled) { settled = true; reject(new Error('timeout')); }
-        }, 15000);
+          this.peer = new Peer(clientId + '-' + retries, {
+            debug: 1,
+            config: {
+              iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:global.stun.twilio.com:3478' },
+                { urls: 'stun:stun2.l.google.com:19302' }
+              ]
+            }
+          });
 
-        this.peer.on('open', () => {
-          const conn = this.peer.connect(hostPeerId, { reliable: true });
-          this.setupConnection(conn);
-          settled = true;
-          clearTimeout(timeout);
-          resolve(conn);
-        });
+          // Give up after 20 seconds per attempt
+          const attemptTimeout = setTimeout(() => {
+            if (settled) return;
+            console.warn('Attempt ' + retries + ' timed out');
+            if (retries >= maxRetries) {
+              settled = true;
+              reject(new Error('client-timeout'));
+            } else {
+              tryConnect();
+            }
+          }, 20000);
 
-        this.peer.on('error', err => {
-          if (!settled) { settled = true; clearTimeout(timeout); reject(err); }
-          else if (this.onError) this.onError(err);
-        });
-      } catch(e) { reject(e); }
+          this.peer.on('open', () => {
+            console.log('Client peer opened, connecting to host:', hostPeerId);
+            
+            const conn = this.peer.connect(hostPeerId, { reliable: true });
+
+            // ⭐ CRITICAL FIX: Resolve only when the connection is TRULY open
+            conn.on('open', () => {
+              console.log('✅ DataConnection to host OPEN');
+              if (settled) return;
+              settled = true;
+              clearTimeout(attemptTimeout);
+              
+              // Register the connection
+              if (!this.connections.includes(conn)) {
+                this.connections.push(conn);
+              }
+              
+              // Attach data + close handlers
+              conn.on('data', data => {
+                if (this.onData) this.onData(data, conn);
+              });
+              
+              conn.on('close', () => {
+                console.log('Connection closed by host');
+                this.connections = this.connections.filter(c => c !== conn);
+                if (this.onPlayerLeave) this.onPlayerLeave(conn);
+              });
+              
+              conn.on('error', err => {
+                console.error('Connection error:', err);
+              });
+
+              AudioManager.play('connect');
+              resolve(conn);
+            });
+
+            // Handle connection-level errors
+            conn.on('error', err => {
+              console.error('Connection setup error:', err);
+              if (!settled) {
+                clearTimeout(attemptTimeout);
+                if (retries < maxRetries) {
+                  tryConnect();
+                } else {
+                  settled = true;
+                  reject(err);
+                }
+              }
+            });
+          });
+
+          this.peer.on('error', err => {
+            console.warn('Client peer error:', err.type, err);
+            
+            if (err.type === 'peer-unavailable') {
+              // Host not found — retry or reject
+              clearTimeout(attemptTimeout);
+              if (!settled) {
+                if (retries < maxRetries) {
+                  setTimeout(() => tryConnect(), 500);
+                } else {
+                  settled = true;
+                  reject(new Error('peer-unavailable'));
+                }
+              }
+              return;
+            }
+            
+            if (err.type === 'unavailable-id') {
+              // Our generated client ID clashed — retry with new one
+              clearTimeout(attemptTimeout);
+              if (!settled) {
+                setTimeout(() => tryConnect(), 200);
+              }
+              return;
+            }
+            
+            if (!settled) {
+              settled = true;
+              clearTimeout(attemptTimeout);
+              reject(err);
+            } else if (this.onError) {
+              this.onError(err);
+            }
+          });
+
+          this.peer.on('disconnected', () => {
+            console.warn('Client disconnected, reconnecting...');
+            try { this.peer.reconnect(); } catch(e) {}
+          });
+        } catch(e) {
+          console.error('tryConnect exception:', e);
+          if (retries < maxRetries) {
+            setTimeout(() => tryConnect(), 500);
+          } else if (!settled) {
+            settled = true;
+            reject(e);
+          }
+        }
+      };
+
+      tryConnect();
     });
   },
 
+  /* ─────────────────────────────────────────
+     HOST SIDE — accept an incoming connection
+  ───────────────────────────────────────── */
   setupConnection(conn) {
     conn.on('open', () => {
-      if (!this.connections.includes(conn)) this.connections.push(conn);
+      console.log('✅ Host: incoming connection OPEN from', conn.peer);
+      
+      if (!this.connections.includes(conn)) {
+        this.connections.push(conn);
+      }
+      
       AudioManager.play('connect');
       if (this.onPlayerJoin) this.onPlayerJoin(conn, this.connections.length);
     });
 
-    conn.on('data', data => { if (this.onData) this.onData(data, conn); });
+    conn.on('data', data => {
+      if (this.onData) this.onData(data, conn);
+    });
 
     conn.on('close', () => {
+      console.log('Host: connection closed', conn.peer);
       this.connections = this.connections.filter(c => c !== conn);
       if (this.onPlayerLeave) this.onPlayerLeave(conn);
     });
 
-    conn.on('error', err => console.error('Conn error:', err));
+    conn.on('error', err => {
+      console.error('Host connection error:', err);
+    });
   },
 
   broadcast(data) {
@@ -277,7 +448,10 @@ const Network = {
   },
 
   disconnect() {
-    if (this.peer) { try { this.peer.destroy(); } catch(e) {} this.peer = null; }
+    if (this.peer) {
+      try { this.peer.destroy(); } catch(e) {}
+      this.peer = null;
+    }
     this.connections = [];
   }
 };
@@ -1094,7 +1268,6 @@ const UI = {
     GAME.isHost = false;
     GAME.isPractice = false;
 
-    // Reset digit inputs
     document.querySelectorAll('.digit-input').forEach(i => { i.value = ''; i.classList.remove('filled'); });
     document.getElementById('joinCodeInput').value = '';
     this.updateDigitState();
@@ -1121,17 +1294,24 @@ const UI = {
   onJoinEvent(conn) {
     if (!GAME.isHost) return;
     const slot = GAME.players.findIndex((p, i) => i > 0 && !p.connected);
-    if (slot < 0) return;
+    if (slot < 0) {
+      // Room is full — politely reject
+      Network.sendTo(conn, { type: 'room_full' });
+      return;
+    }
     GAME.players[slot].connected = true;
     GAME.players[slot].id = conn.peer;
     GAME.players[slot].name = 'PLAYER ' + (slot + 1);
 
+    // Send welcome to the new joiner
     Network.sendTo(conn, {
       type: 'welcome',
       playerIndex: slot,
       players: GAME.players,
       roomCode: GAME.roomCode
     });
+
+    // Broadcast updated player list to everyone
     Network.broadcast({ type: 'players_update', players: GAME.players });
 
     this.updateFriendSlots();
@@ -1146,6 +1326,7 @@ const UI = {
       GAME.players[idx].id = null;
       GAME.players[idx].name = 'PLAYER ' + (idx + 1);
       this.updateFriendSlots();
+      Network.broadcast({ type: 'players_update', players: GAME.players });
       Toast.show('A player left', 'info', '👋');
     }
   },
@@ -1159,14 +1340,24 @@ const UI = {
         document.getElementById('connectingOverlay').classList.add('hidden');
         Toast.show('Connected! You are ' + GAME.players[GAME.myPlayerIndex].name, 'success', '🎉');
         break;
+
+      case 'room_full':
+        document.getElementById('connectingOverlay').classList.add('hidden');
+        Toast.show('Room is full (3 players max)', 'error', '🚫');
+        Network.disconnect();
+        GAME.mode = 'menu';
+        break;
+
       case 'players_update':
         GAME.players = data.players;
         break;
+
       case 'start_game':
         GAME.players = data.players;
         GAME.currentTurn = data.currentTurn;
         this.enterGame();
         break;
+
       case 'shot':
         if (data.player !== GAME.myPlayerIndex) {
           Physics.striker.x = data.x;
@@ -1176,21 +1367,28 @@ const UI = {
           Game.isResolving = true;
         }
         break;
+
       case 'turn_change':
         GAME.currentTurn = data.currentTurn;
         Physics.striker = Physics.createStriker(GAME.currentTurn);
         Game.updateTurnUI();
         AudioManager.play('turn');
         break;
+
       case 'reaction':
         this.showReaction(data.emoji);
+        break;
+
+      case 'play_again':
+        this.playAgain();
         break;
     }
   },
 
   onNetError(err) {
+    console.warn('Net error:', err);
     document.getElementById('connectingOverlay').classList.add('hidden');
-    Toast.show('Network error', 'error', '❌');
+    Toast.show('Network error. Try again.', 'error', '❌');
   },
 
   updateFriendSlots() {
@@ -1276,16 +1474,27 @@ const UI = {
         onError: e => this.onNetError(e)
       });
 
+      // Connection succeeded — welcome message will hide the overlay
+      // Safety fallback: hide overlay after 2s if welcome hasn't arrived
       setTimeout(() => {
-        if (Network.connections.length === 0) {
-          document.getElementById('connectingOverlay').classList.add('hidden');
-          Toast.show('Room not found. Check the number.', 'error', '❌');
-          GAME.mode = 'menu';
+        const overlay = document.getElementById('connectingOverlay');
+        if (!overlay.classList.contains('hidden')) {
+          overlay.classList.add('hidden');
+          Toast.show('Connected to room #' + code, 'success', '🎉');
         }
-      }, 6000);
-    } catch(e) {
+      }, 2000);
+    } catch(err) {
+      console.warn('Connect failed:', err);
       document.getElementById('connectingOverlay').classList.add('hidden');
-      Toast.show('Connection failed', 'error', '❌');
+      if (err && err.message === 'peer-unavailable') {
+        Toast.show('Room not found. Check the number.', 'error', '❌');
+      } else if (err && err.message === 'client-timeout') {
+        Toast.show('Connection timed out. Try again.', 'error', '⏱️');
+      } else {
+        Toast.show('Connection failed. Try again.', 'error', '❌');
+      }
+      Network.disconnect();
+      GAME.mode = 'menu';
     }
   },
 
@@ -1306,6 +1515,7 @@ const UI = {
     document.getElementById('mainMenu').classList.add('hidden');
     document.getElementById('gameScreen').classList.remove('hidden');
     document.getElementById('gameOverOverlay').classList.add('hidden');
+    document.getElementById('connectingOverlay').classList.add('hidden');
     GAME.mode = GAME.isPractice ? 'practice' : 'playing';
     GAME.players.forEach(p => p.score = 0);
     Game.updateScores();
@@ -1344,6 +1554,7 @@ const UI = {
     document.getElementById('gameOverOverlay').classList.add('hidden');
     document.getElementById('createModal').classList.add('hidden');
     document.getElementById('joinModal').classList.add('hidden');
+    document.getElementById('connectingOverlay').classList.add('hidden');
     Physics.pucks = [];
     Physics.striker = null;
     Physics.particles = [];
@@ -1443,7 +1654,6 @@ window.addEventListener('DOMContentLoaded', () => {
   UI.init();
   runOpening();
 
-  // Auto-open join modal if ?room=NNNN
   const params = new URLSearchParams(location.search);
   const roomParam = params.get('room');
   if (roomParam && /^\d{4}$/.test(roomParam)) {
