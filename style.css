@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P • STYLESHEET
+   CARROM 3P • STYLESHEET (v5)
 ═══════════════════════════════════════════════════════════ */
 
 *,
@@ -104,11 +104,12 @@ button { cursor: pointer; user-select: none; }
   0% { transform: translateX(0); opacity: 1; }
   100% { transform: translateX(120%); opacity: 0; }
 }
-@keyframes emojiFloat {
-  0% { transform: translateY(0) scale(0.3) rotate(-10deg); opacity: 0; }
-  20% { transform: translateY(-30px) scale(1.3) rotate(6deg); opacity: 1; }
-  50% { transform: translateY(-140px) scale(1.1) rotate(-4deg); opacity: 1; }
-  100% { transform: translateY(-320px) scale(0.7) rotate(8deg); opacity: 0; }
+@keyframes chatBubbleFloat {
+  0% { transform: translateY(20px) scale(0.4); opacity: 0; }
+  15% { transform: translateY(0) scale(1.05); opacity: 1; }
+  25% { transform: translateY(0) scale(1); opacity: 1; }
+  80% { transform: translateY(-120px) scale(1); opacity: 1; }
+  100% { transform: translateY(-200px) scale(0.8); opacity: 0; }
 }
 @keyframes confettiFall {
   0% { transform: translateY(-20px) rotate(0deg); opacity: 1; }
@@ -132,8 +133,8 @@ button { cursor: pointer; user-select: none; }
   100% { transform: scale(1); }
 }
 @keyframes waitPulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.7; transform: scale(0.96); }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
 /* OPENING */
@@ -800,41 +801,35 @@ button { cursor: pointer; user-select: none; }
   cursor: crosshair;
 }
 
-/* WAIT OVERLAY */
-.wait-overlay {
-  position: absolute;
-  inset: 12px;
-  border-radius: var(--r-l);
-  background: rgba(6, 9, 16, 0.72);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+/* WAIT BAR — below the board */
+.wait-bar {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 10;
-  animation: fadeIn 0.25s ease;
-  pointer-events: auto;
+  gap: 10px;
+  padding: 10px 16px;
+  margin: 0 16px;
+  background: rgba(245,197,66,0.08);
+  border: 1px solid rgba(245,197,66,0.25);
+  border-radius: var(--r-full);
+  flex-shrink: 0;
+  animation: fadeIn 0.3s ease;
 }
-.wait-overlay.hidden { display: none; }
-.wait-inner { text-align: center; animation: waitPulse 2s ease-in-out infinite; }
-.wait-icon {
-  font-size: 44px;
-  margin-bottom: 12px;
-  filter: drop-shadow(0 0 24px rgba(245,197,66,0.5));
+.wait-bar.hidden { display: none; }
+.wb-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gold);
+  box-shadow: 0 0 10px var(--gold-glow);
+  animation: pulseSoft 1.4s ease-in-out infinite;
 }
-.wait-title {
-  font-size: 20px;
-  font-weight: 900;
-  letter-spacing: 0.25em;
-  color: #ffffff;
-  margin-bottom: 6px;
-  text-shadow: 0 2px 20px rgba(0,0,0,0.6);
-}
-.wait-sub {
+.wb-text {
   font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  color: rgba(255,255,255,0.65);
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  color: var(--gold);
+  animation: waitPulse 1.8s ease-in-out infinite;
 }
 
 /* ADJUST STRIKER SLIDER */
@@ -952,27 +947,35 @@ button { cursor: pointer; user-select: none; }
   color: var(--txt-2);
 }
 
+/* QUICK CHAT */
 .reactions-row {
   display: flex;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   padding: 0 16px 16px;
   padding-bottom: max(16px, env(safe-area-inset-bottom));
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 .reaction {
-  width: 40px; height: 40px;
-  border-radius: 50%;
+  padding: 8px 14px;
+  border-radius: var(--r-full);
   background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.08);
-  font-size: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  color: var(--txt-1);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
   transition: all var(--t-1);
+  white-space: nowrap;
 }
-.reaction:hover { background: rgba(255,255,255,0.12); transform: scale(1.15) translateY(-3px); }
-.reaction:active { transform: scale(0.9); }
+.reaction:hover {
+  background: rgba(245,197,66,0.15);
+  border-color: rgba(245,197,66,0.4);
+  color: var(--gold);
+  transform: translateY(-3px);
+}
+.reaction:active { transform: scale(0.94); }
 
 .gameover {
   position: absolute;
@@ -1052,7 +1055,7 @@ button { cursor: pointer; user-select: none; }
 .ghost-btn:hover { background: rgba(255,255,255,0.1); color: var(--txt-1); }
 .ghost-btn:active { transform: scale(0.97); }
 
-/* TOASTS & EMOJI */
+/* TOASTS & CHAT */
 .toast-container {
   position: fixed;
   top: 20px;
@@ -1086,19 +1089,41 @@ button { cursor: pointer; user-select: none; }
 .toast.info { border-left: 3px solid var(--gold); }
 .toast-icon { font-size: 16px; }
 
-.emoji-layer {
+.chat-layer {
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 900;
   overflow: hidden;
 }
-.floating-emoji {
+.chat-bubble {
   position: absolute;
-  font-size: 52px;
-  animation: emojiFloat 2.6s ease-out forwards;
-  filter: drop-shadow(0 6px 16px rgba(0,0,0,0.5));
+  padding: 12px 20px;
+  background: linear-gradient(135deg, #f5c542, #b88a1e);
+  color: #0a0e17;
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  border-radius: 22px;
+  box-shadow: 
+    0 8px 24px rgba(0,0,0,0.4),
+    0 0 30px rgba(245,197,66,0.5),
+    inset 0 -2px 0 rgba(0,0,0,0.15);
+  white-space: nowrap;
+  animation: chatBubbleFloat 2.6s ease-out forwards;
   will-change: transform, opacity;
+}
+.chat-bubble::after {
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-top: 10px solid #b88a1e;
 }
 
 .hidden { display: none !important; }
@@ -1120,8 +1145,8 @@ button { cursor: pointer; user-select: none; }
   .go-heading { font-size: 30px; }
   .go-icon { font-size: 60px; }
   .digit-input { width: 48px; height: 60px; font-size: 26px; }
-  .wait-title { font-size: 16px; }
-  .wait-icon { font-size: 36px; }
+  .reaction { padding: 6px 10px; font-size: 10px; }
+  .chat-bubble { font-size: 14px; padding: 10px 16px; }
 }
 @media (max-height: 700px) {
   .board-wrap { padding: 0 12px; }
@@ -1130,12 +1155,13 @@ button { cursor: pointer; user-select: none; }
   .reactions-row { padding-bottom: 10px; }
   .adjust-row { padding: 4px 20px; }
   .power-row { padding: 6px 20px; }
+  .wait-bar { padding: 8px 14px; }
 }
 @media (orientation: landscape) and (max-height: 500px) {
   .board-frame { max-width: min(80vh, 400px); }
   .players-row { display: none; }
   .reactions-row { padding-bottom: 6px; }
-  .reaction { width: 34px; height: 34px; font-size: 16px; }
+  .reaction { padding: 5px 9px; font-size: 9px; }
 }
 @media (hover: none) {
   .action-primary:hover { transform: none; }
