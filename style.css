@@ -1,274 +1,859 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <meta name="theme-color" content="#ffffff">
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <meta http-equiv="Pragma" content="no-cache">
-  <meta http-equiv="Expires" content="0">
-  <title>Carrom 3P</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800;900&family=Space+Mono:wght@700&display=swap" rel="stylesheet">
-  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
+/* ═══════════════════════════════════════════════════════════
+   CARROM 3P • STYLESHEET
+═══════════════════════════════════════════════════════════ */
 
-  <!-- OPENING -->
-  <div id="openingScreen" class="opening-screen">
-    <div class="opening-inner">
-      <div class="opening-trio">
-        <span class="trio-dot d1"></span>
-        <span class="trio-dot d2"></span>
-        <span class="trio-dot d3"></span>
-      </div>
-      <h1 class="opening-title">
-        <span style="--i:0">C</span><span style="--i:1">A</span><span style="--i:2">R</span>
-        <span style="--i:3">R</span><span style="--i:4">O</span><span style="--i:5">M</span>
-      </h1>
-      <p class="opening-tag">PLAY • WITH • FRIENDS</p>
-      <div class="opening-bar"><div class="opening-bar-fill" id="openingBarFill"></div></div>
-    </div>
-    <div class="opening-hint">TAP TO CONTINUE</div>
-  </div>
+*, *::before, *::after {
+  margin: 0; padding: 0; box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
 
-  <!-- MAIN MENU -->
-  <div id="mainMenu" class="main-menu hidden">
-    <div class="menu-inner">
-      <div class="menu-top">
-        <div class="brand-dots"><span></span><span></span><span></span></div>
-        <h1 class="menu-title">Carrom 3P</h1>
-        <p class="menu-sub">3 Player Carrom Play</p>
-        <p class="menu-note">First to 100 points wins</p>
-      </div>
-      <div class="menu-actions">
-        <button class="action-primary create-action" id="createRoomBtn">
-          <span class="ap-icon">+</span>
-          <span class="ap-label">Create Room</span>
-          <span class="ap-arrow">→</span>
-        </button>
-        <button class="action-primary join-action" id="joinRoomBtn">
-          <span class="ap-icon">⌂</span>
-          <span class="ap-label">Join Room</span>
-          <span class="ap-arrow">→</span>
-        </button>
-        <button class="action-solid solid-teal" id="practiceBtn">
-          <span class="ap-icon ap-icon-ghost">3</span>
-          <span class="ap-label">3 Player on One Screen</span>
-        </button>
-        <button class="action-solid solid-purple" id="twoPlayerBtn">
-          <span class="ap-icon ap-icon-ghost">2</span>
-          <span class="ap-label">Two Player on One Screen</span>
-        </button>
-      </div>
-      <div class="menu-footer"><span class="live-dot"></span><span>READY</span></div>
-    </div>
-  </div>
+:root {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --line: #e5e7eb;
+  --line-strong: #cfd3db;
+  --txt-1: #111827;
+  --txt-2: #4b5563;
+  --txt-3: #9ca3af;
+  --gold: #d99a10;
+  --gold-2: #b37e08;
+  --gold-soft: #fff7e0;
+  --p1: #e63946;
+  --p2: #2a9d8f;
+  --p3: #9c6ade;
+  --ok: #16a34a;
+  --err: #dc2626;
+  --shadow-1: 0 1px 2px rgba(17,24,39,0.05);
+  --shadow-2: 0 4px 10px rgba(17,24,39,0.08);
+  --shadow-3: 0 12px 28px rgba(17,24,39,0.12);
+  --r-s: 8px;
+  --r-m: 12px;
+  --r-l: 18px;
+  --r-xl: 22px;
+  --r-full: 999px;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --t-1: 0.14s var(--ease);
+  --t-2: 0.22s var(--ease);
+  --t-3: 0.35s var(--ease);
+}
 
-  <!-- CREATE MODAL -->
-  <div id="createModal" class="modal-overlay hidden">
-    <div class="modal-box">
-      <button class="modal-x" id="createClose">✕</button>
-      <div class="you-card">
-        <div class="you-avatar" style="background:#e63946"><span>1</span></div>
-        <div class="you-info">
-          <div class="you-name">YOU</div>
-          <div class="you-status" id="hostStatus">Ready</div>
-        </div>
-      </div>
-      <div class="invite-divider"><span>INVITE 2 FRIENDS</span></div>
-      <div class="friend-slots" id="friendSlots">
-        <div class="friend-slot" data-slot="2">
-          <div class="fs-avatar empty">2</div>
-          <div class="fs-info">
-            <span class="fs-name">Waiting…</span>
-            <span class="fs-tag">Not connected</span>
-          </div>
-        </div>
-        <div class="friend-slot" data-slot="3">
-          <div class="fs-avatar empty">3</div>
-          <div class="fs-info">
-            <span class="fs-name">Waiting…</span>
-            <span class="fs-tag">Not connected</span>
-          </div>
-        </div>
-      </div>
-      <div class="code-block">
-        <div class="code-label">ROOM NUMBER</div>
-        <div class="code-row">
-          <div class="code-big" id="roomCodeDisplay">----</div>
-          <button class="icon-btn" id="copyCodeBtn" title="Copy code">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="9" y="9" width="13" height="13" rx="2"/>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-            </svg>
-          </button>
-        </div>
-        <button class="share-btn" id="shareLinkBtn">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
-            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-          </svg>
-          <span>SHARE INVITE LINK</span>
-        </button>
-      </div>
-      <div class="waiting-hint" id="waitingHint">Waiting for friends to join…</div>
-      <button class="start-btn" id="startGameBtn" disabled>
-        <span id="startBtnText">NEED 2 MORE</span>
-      </button>
-    </div>
-  </div>
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
 
-  <!-- JOIN MODAL -->
-  <div id="joinModal" class="modal-overlay hidden">
-    <div class="modal-box modal-small">
-      <button class="modal-x" id="joinClose">✕</button>
-      <div class="join-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
-          <polyline points="10 17 15 12 10 7"/>
-          <line x1="15" y1="12" x2="3" y2="12"/>
-        </svg>
-      </div>
-      <h2 class="modal-heading">Join Room</h2>
-      <p class="modal-text">Enter the 4-digit number from your friend</p>
-      <div class="digit-inputs" id="digitInputs">
-        <input type="tel" class="digit-input" maxlength="1" inputmode="numeric" pattern="[0-9]">
-        <input type="tel" class="digit-input" maxlength="1" inputmode="numeric" pattern="[0-9]">
-        <input type="tel" class="digit-input" maxlength="1" inputmode="numeric" pattern="[0-9]">
-        <input type="tel" class="digit-input" maxlength="1" inputmode="numeric" pattern="[0-9]">
-      </div>
-      <input type="hidden" id="joinCodeInput">
-      <button class="start-btn" id="connectBtn" disabled>
-        <span id="connectBtnText">ENTER 4 DIGITS</span>
-      </button>
-    </div>
-  </div>
+body {
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #ffffff;
+  color: var(--txt-1);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.5;
+}
 
-  <!-- CONNECTING -->
-  <div id="connectingOverlay" class="connecting-overlay hidden">
-    <div class="connecting-inner">
-      <div class="connecting-dots"><span></span><span></span><span></span></div>
-      <p id="connectingText">Connecting…</p>
-    </div>
-  </div>
+h1, h2, h3 { font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; }
+button, input { font-family: inherit; outline: none; border: none; background: none; color: inherit; }
+button { cursor: pointer; user-select: none; }
 
-  <!-- GAME -->
-  <div id="gameScreen" class="game-screen hidden">
-    <div class="game-topbar">
-      <button class="top-btn" id="backBtn" aria-label="Back">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
-          <polyline points="15 18 9 12 15 6"/>
-        </svg>
-      </button>
-      <div class="top-center"><span class="live-dot"></span><span>FIRST TO 100</span></div>
-      <div class="topbar-right">
-        <button class="top-btn chat-toggle" id="chatToggle" aria-label="Chat">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
-          </svg>
-        </button>
-        <button class="top-btn" id="soundToggle" aria-label="Sound">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="soundOnIcon">
-            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-            <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
-          </svg>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="soundOffIcon" style="display:none">
-            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-            <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
-          </svg>
-        </button>
-        <div class="chat-menu" id="chatMenu">
-          <div class="chat-menu-head">QUICK CHAT</div>
-          <button class="chat-item" data-msg="Great Shot!">Great Shot!</button>
-          <button class="chat-item" data-msg="Cool!">Cool!</button>
-          <button class="chat-item" data-msg="Nice Try!">Nice Try!</button>
-          <button class="chat-item" data-msg="Thanks!">Thanks!</button>
-          <button class="chat-item" data-msg="Oof!">Oof!</button>
-        </div>
-      </div>
-    </div>
+/* ═══════════ ANIMATIONS ═══════════ */
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes popIn {
+  0% { opacity: 0; transform: scale(0.95); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+@keyframes bounceDot {
+  0%, 80%, 100% { transform: translateY(0) scale(1); opacity: 0.5; }
+  40% { transform: translateY(-12px) scale(1.15); opacity: 1; }
+}
+@keyframes titleDrop {
+  0% { opacity: 0; transform: translateY(-22px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes toastIn {
+  0% { transform: translateX(30px); opacity: 0; }
+  100% { transform: translateX(0); opacity: 1; }
+}
+@keyframes toastOut {
+  0% { transform: translateX(0); opacity: 1; }
+  100% { transform: translateX(30px); opacity: 0; }
+}
+@keyframes chatBubbleFloat {
+  0%   { transform: translateY(20px) scale(0.5); opacity: 0; }
+  15%  { transform: translateY(0) scale(1.04); opacity: 1; }
+  25%  { transform: translateY(0) scale(1); opacity: 1; }
+  80%  { transform: translateY(-100px) scale(1); opacity: 1; }
+  100% { transform: translateY(-180px) scale(0.8); opacity: 0; }
+}
+@keyframes confettiFall {
+  0%   { transform: translateY(-20px) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(110vh) rotate(720deg); opacity: 0; }
+}
+@keyframes slideInRight {
+  from { transform: translateX(16px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes ringOut {
+  0% { transform: scale(0.7); opacity: 0.9; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+@keyframes digitPop {
+  0% { transform: scale(0.85); }
+  100% { transform: scale(1); }
+}
+@keyframes floatY {
+  0%,100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
 
-    <div class="players-row">
-      <div class="player-chip p1-chip active" data-p="0">
-        <span class="pc-dot" style="background:#e63946"></span>
-        <div class="pc-info">
-          <div class="pc-name">YOU</div>
-          <div class="pc-score" id="scoreP0">0</div>
-        </div>
-      </div>
-      <div class="player-chip p2-chip" data-p="1">
-        <span class="pc-dot" style="background:#2a9d8f"></span>
-        <div class="pc-info">
-          <div class="pc-name" id="nameP1">P2</div>
-          <div class="pc-score" id="scoreP1">0</div>
-        </div>
-      </div>
-      <div class="player-chip p3-chip" data-p="2">
-        <span class="pc-dot" style="background:#9c6ade"></span>
-        <div class="pc-info">
-          <div class="pc-name" id="nameP2">P3</div>
-          <div class="pc-score" id="scoreP2">0</div>
-        </div>
-      </div>
-    </div>
+/* ═══════════ OPENING ═══════════ */
+.opening-screen {
+  position: fixed; inset: 0; z-index: 9999;
+  background: #ffffff;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  transition: opacity 0.4s var(--ease), visibility 0.4s var(--ease);
+  cursor: pointer;
+}
+.opening-screen.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+.opening-inner { text-align: center; position: relative; z-index: 2; }
+.opening-trio { display: flex; justify-content: center; gap: 12px; margin-bottom: 30px; }
+.trio-dot { width: 18px; height: 18px; border-radius: 50%; display: inline-block; }
+.trio-dot.d1 { background: var(--p1); animation: bounceDot 1.4s ease-in-out infinite; }
+.trio-dot.d2 { background: var(--p2); animation: bounceDot 1.4s ease-in-out infinite 0.18s; }
+.trio-dot.d3 { background: var(--p3); animation: bounceDot 1.4s ease-in-out infinite 0.36s; }
+.opening-title {
+  font-size: 54px; font-weight: 900; letter-spacing: 0.16em;
+  display: flex; justify-content: center; gap: 2px; margin-bottom: 14px;
+  color: #111827;
+}
+.opening-title span {
+  display: inline-block;
+  color: #111827;
+  animation: titleDrop 0.7s var(--ease) backwards;
+  animation-delay: calc(var(--i) * 0.06s);
+}
+.opening-tag {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.42em;
+  color: var(--txt-3); margin-bottom: 52px;
+  animation: fadeIn 0.9s ease 0.6s backwards;
+}
+.opening-bar {
+  width: 200px; height: 3px; background: #f0f0f3;
+  border-radius: var(--r-full); margin: 0 auto; overflow: hidden;
+  animation: fadeIn 0.9s ease 0.8s backwards;
+}
+.opening-bar-fill {
+  height: 100%; width: 0%;
+  background: var(--gold);
+  border-radius: var(--r-full);
+  transition: width 0.3s var(--ease);
+}
+.opening-hint {
+  position: absolute; bottom: 32px; left: 0; right: 0;
+  text-align: center; font-size: 10px; font-weight: 700;
+  letter-spacing: 0.35em; color: var(--txt-3);
+  animation: pulse 2s ease-in-out infinite; z-index: 3;
+}
 
-    <div class="legend-row">
-      <span class="legend-item"><span class="legend-dot legend-white"></span>White 20</span>
-      <span class="legend-sep">•</span>
-      <span class="legend-item"><span class="legend-dot legend-black"></span>Black 10</span>
-      <span class="legend-sep">•</span>
-      <span class="legend-item legend-hint">First to 100 wins</span>
-      <span class="legend-sep">•</span>
-      <span class="legend-item legend-hint">Striker foul −20</span>
-    </div>
+/* ═══════════ MAIN MENU ═══════════ */
+.main-menu {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  background: #ffffff;
+  animation: fadeIn 0.4s ease;
+}
+.main-menu.hidden { display: none; }
+.menu-inner {
+  width: 100%; max-width: 360px;
+  padding: 32px 22px; text-align: center;
+  animation: fadeUp 0.5s var(--ease);
+}
+.menu-top { margin-bottom: 30px; }
+.brand-dots { display: inline-flex; gap: 8px; margin-bottom: 16px; }
+.brand-dots span {
+  width: 8px; height: 8px; border-radius: 50%;
+  display: inline-block;
+  animation: pulse 2.2s ease-in-out infinite;
+}
+.brand-dots span:nth-child(1) { background: var(--p1); }
+.brand-dots span:nth-child(2) { background: var(--p2); animation-delay: 0.3s; }
+.brand-dots span:nth-child(3) { background: var(--p3); animation-delay: 0.6s; }
+.menu-title { font-size: 40px; font-weight: 900; color: #111827; margin-bottom: 6px; }
+.menu-sub { font-size: 14px; color: var(--txt-2); font-weight: 600; }
+.menu-note { font-size: 11px; color: var(--txt-3); font-weight: 600; letter-spacing: 0.06em; margin-top: 4px; }
 
-    <div class="board-wrap">
-      <div class="board-frame" id="boardFrame">
-        <canvas id="gameCanvas" width="700" height="700"></canvas>
-      </div>
-    </div>
+.menu-actions { display: flex; flex-direction: column; gap: 10px; margin-bottom: 22px; }
+.action-primary {
+  position: relative;
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 18px;
+  border-radius: var(--r-l);
+  font-size: 14px; font-weight: 800; letter-spacing: 0.02em;
+  overflow: hidden;
+  transition: all var(--t-2);
+  color: #ffffff;
+}
+.action-primary .ap-icon {
+  width: 32px; height: 32px; border-radius: var(--r-m);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 700; flex-shrink: 0;
+  background: rgba(255,255,255,0.2);
+  position: relative; z-index: 1;
+}
+.action-primary .ap-label { flex: 1; text-align: left; position: relative; z-index: 1; }
+.action-primary .ap-arrow {
+  font-size: 18px; position: relative; z-index: 1;
+  transition: transform var(--t-2);
+}
+.action-primary:hover .ap-arrow { transform: translateX(3px); }
 
-    <div class="wait-bar hidden" id="waitBar">
-      <span class="wb-dot"></span>
-      <span class="wb-text" id="waitBarText">P2 is playing…</span>
-    </div>
+.create-action { background: var(--gold); animation: fadeUp 0.5s var(--ease) 0.1s backwards; }
+.create-action:hover { transform: translateY(-2px); }
+.create-action:active { transform: translateY(0); }
 
-    <div class="adjust-row hidden" id="adjustRow">
-      <span class="adjust-label">POS</span>
-      <div class="adjust-track" id="adjustTrack">
-        <div class="adjust-fill" id="adjustFill"></div>
-        <div class="adjust-thumb" id="adjustThumb"></div>
-      </div>
-    </div>
+.join-action { background: var(--p2); animation: fadeUp 0.5s var(--ease) 0.18s backwards; }
+.join-action:hover { transform: translateY(-2px); }
+.join-action:active { transform: translateY(0); }
 
-    <div class="power-row" id="powerRow">
-      <span class="power-label">PWR</span>
-      <div class="power-track"><div class="power-fill" id="powerFill"></div></div>
-    </div>
+.action-solid {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px; border-radius: var(--r-l);
+  font-size: 13px; font-weight: 800; letter-spacing: 0.02em;
+  color: #ffffff; transition: all var(--t-2);
+  border: none;
+}
+.action-solid .ap-label { flex: 1; text-align: left; }
+.action-solid .ap-icon {
+  width: 30px; height: 30px; border-radius: var(--r-m);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 800;
+  background: rgba(255,255,255,0.25);
+  flex-shrink: 0;
+}
+.action-solid:hover { transform: translateY(-2px); }
+.action-solid:active { transform: translateY(0); }
+.solid-teal { background: var(--p2); animation: fadeUp 0.5s var(--ease) 0.26s backwards; }
+.solid-purple { background: var(--p3); animation: fadeUp 0.5s var(--ease) 0.34s backwards; }
 
-    <div class="turn-row">
-      <span class="turn-swatch" id="turnSwatch"></span>
-      <span class="turn-label" id="turnLabel">Your turn</span>
-    </div>
+.menu-footer {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 14px; background: #ffffff;
+  border: 1px solid var(--line); border-radius: var(--r-full);
+  font-size: 10px; font-weight: 700; letter-spacing: 0.15em;
+  color: var(--txt-3);
+  animation: fadeIn 0.7s ease 0.4s backwards;
+}
+.live-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--ok);
+  animation: pulse 1.6s infinite;
+  display: inline-block;
+}
 
-    <div id="gameOverOverlay" class="gameover hidden">
-      <div class="go-box">
-        <div class="go-icon" id="goIcon">🏆</div>
-        <h2 class="go-heading" id="goHeading">VICTORY</h2>
-        <p class="go-text" id="goText">Player wins</p>
-        <div class="go-scores" id="goScores"></div>
-        <button class="start-btn" id="playAgainBtn"><span>PLAY AGAIN</span></button>
-        <button class="ghost-btn" id="goMenuBtn"><span>MAIN MENU</span></button>
-      </div>
-    </div>
-  </div>
+/* ═══════════ MODALS ═══════════ */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 500;
+  background: rgba(17,24,39,0.35);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+  animation: fadeIn 0.25s ease;
+  overflow-y: auto;
+}
+.modal-overlay.hidden { display: none; }
+.modal-box {
+  position: relative; width: 100%; max-width: 380px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  padding: 24px 20px;
+  animation: popIn 0.35s var(--ease);
+  box-shadow: var(--shadow-3);
+  margin: auto;
+}
+.modal-small { max-width: 330px; text-align: center; }
+.modal-x {
+  position: absolute; top: 12px; right: 12px;
+  width: 32px; height: 32px; border-radius: 50%;
+  background: #f3f4f6;
+  color: var(--txt-2); font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+  transition: all var(--t-1); z-index: 2;
+}
+.modal-x:hover { background: #e5e7eb; color: var(--txt-1); }
+.modal-x:active { transform: scale(0.9); }
 
-  <div id="toastContainer" class="toast-container"></div>
-  <div id="chatLayer" class="chat-layer"></div>
-  <script src="script.js"></script>
-</body>
-</html>
+.you-card {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  border-radius: var(--r-m);
+  margin-bottom: 18px;
+}
+.you-avatar {
+  width: 42px; height: 42px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 16px; color: #fff;
+  position: relative;
+}
+.you-avatar::after {
+  content: ''; position: absolute; inset: -3px; border-radius: 50%;
+  border: 2px solid var(--p1);
+  animation: ringOut 2.2s ease-out infinite;
+}
+.you-info { flex: 1; text-align: left; }
+.you-name { font-size: 14px; font-weight: 800; letter-spacing: 0.06em; margin-bottom: 2px; }
+.you-status { font-size: 11px; font-weight: 700; color: var(--ok); letter-spacing: 0.08em; }
+
+.invite-divider { display: flex; align-items: center; gap: 10px; margin: 6px 0 14px; }
+.invite-divider::before,
+.invite-divider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.invite-divider span {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.22em;
+  color: var(--txt-3); padding: 0 4px;
+}
+
+.friend-slots { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+.friend-slot {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  background: #f9fafb;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-m);
+  transition: all var(--t-2);
+}
+.friend-slot.connected { background: #ecfdf5; border: 1px solid #6ee7b7; }
+.friend-slot.connected[data-slot="3"] { background: #f5f3ff; border-color: #c4b5fd; }
+.fs-avatar {
+  width: 36px; height: 36px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 14px; color: #fff; flex-shrink: 0;
+}
+.fs-avatar.empty {
+  background: #ffffff;
+  border: 1px dashed var(--line-strong); color: var(--txt-3);
+}
+.friend-slot.connected[data-slot="2"] .fs-avatar { background: var(--p2); }
+.friend-slot.connected[data-slot="3"] .fs-avatar { background: var(--p3); }
+.fs-info { flex: 1; text-align: left; }
+.fs-name { display: block; font-size: 13px; font-weight: 700; }
+.fs-tag {
+  display: block; font-size: 10px; font-weight: 600;
+  letter-spacing: 0.08em; color: var(--txt-3); margin-top: 2px;
+}
+.friend-slot.connected .fs-tag { color: var(--ok); }
+
+.code-block {
+  background: #f9fafb;
+  border: 1px solid var(--line);
+  border-radius: var(--r-l);
+  padding: 14px;
+  margin-bottom: 14px;
+}
+.code-label {
+  font-size: 9px; font-weight: 800; letter-spacing: 0.3em;
+  color: var(--gold-2); margin-bottom: 6px; text-align: left;
+}
+.code-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.code-big {
+  flex: 1; font-family: 'Space Mono', monospace;
+  font-size: 36px; font-weight: 700; letter-spacing: 0.22em;
+  color: var(--txt-1); padding-left: 6px;
+}
+.icon-btn {
+  width: 40px; height: 40px; border-radius: var(--r-m);
+  background: var(--gold-soft);
+  border: 1px solid #f4dcae;
+  color: var(--gold-2);
+  display: flex; align-items: center; justify-content: center;
+  transition: all var(--t-1); flex-shrink: 0;
+}
+.icon-btn:hover { background: #ffefc7; }
+.icon-btn:active { transform: scale(0.92); }
+.icon-btn svg { width: 16px; height: 16px; stroke-linecap: round; stroke-linejoin: round; }
+
+.share-btn {
+  width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 10px;
+  background: var(--gold-soft);
+  border: 1px solid #f4dcae;
+  border-radius: var(--r-m);
+  color: var(--gold-2); font-size: 11px; font-weight: 800;
+  letter-spacing: 0.12em;
+  transition: all var(--t-1);
+}
+.share-btn:hover { background: #ffefc7; }
+.share-btn:active { transform: scale(0.98); }
+.share-btn svg { width: 14px; height: 14px; stroke-linecap: round; stroke-linejoin: round; }
+
+.waiting-hint {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+  color: var(--txt-3); margin-bottom: 14px; text-align: center;
+  animation: pulse 2.4s ease-in-out infinite;
+}
+.waiting-hint.hidden { display: none; }
+
+.start-btn {
+  position: relative; width: 100%; padding: 16px;
+  background: var(--gold);
+  color: #ffffff;
+  border-radius: var(--r-l);
+  font-size: 13px; font-weight: 900; letter-spacing: 0.08em;
+  transition: all var(--t-2);
+}
+.start-btn:not(:disabled):hover { background: var(--gold-2); }
+.start-btn:not(:disabled):active { transform: translateY(1px); }
+.start-btn:disabled {
+  background: #e5e7eb; color: #9ca3af; cursor: not-allowed;
+}
+
+.join-icon {
+  width: 60px; height: 60px; border-radius: var(--r-l);
+  background: #ecfdf5;
+  border: 1px solid #6ee7b7;
+  color: var(--p2);
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 16px;
+}
+.join-icon svg { width: 26px; height: 26px; stroke-linecap: round; stroke-linejoin: round; }
+.modal-heading { font-size: 22px; font-weight: 800; margin-bottom: 4px; }
+.modal-text { font-size: 12px; color: var(--txt-2); margin-bottom: 20px; font-weight: 500; }
+
+.digit-inputs { display: flex; justify-content: center; gap: 8px; margin-bottom: 20px; }
+.digit-input {
+  width: 52px; height: 62px;
+  background: #ffffff;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-m);
+  font-family: 'Space Mono', monospace;
+  font-size: 26px; font-weight: 700; text-align: center;
+  color: var(--txt-1);
+  transition: all var(--t-1);
+  caret-color: var(--gold);
+}
+.digit-input:focus {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(217,154,16,0.15);
+  animation: digitPop 0.2s var(--ease);
+}
+.digit-input.filled {
+  border-color: #6ee7b7;
+  background: #ecfdf5;
+}
+
+.connecting-overlay {
+  position: fixed; inset: 0; z-index: 600;
+  background: rgba(255,255,255,0.9);
+  display: flex; align-items: center; justify-content: center;
+  animation: fadeIn 0.25s ease;
+}
+.connecting-overlay.hidden { display: none; }
+.connecting-inner { text-align: center; }
+.connecting-dots { display: flex; justify-content: center; gap: 10px; margin-bottom: 20px; }
+.connecting-dots span {
+  width: 12px; height: 12px; border-radius: 50%;
+  animation: bounceDot 1.4s ease-in-out infinite;
+}
+.connecting-dots span:nth-child(1) { background: var(--p1); }
+.connecting-dots span:nth-child(2) { background: var(--p2); animation-delay: 0.18s; }
+.connecting-dots span:nth-child(3) { background: var(--p3); animation-delay: 0.36s; }
+.connecting-inner p {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.08em;
+  color: var(--txt-2);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* ═══════════ GAME SCREEN ═══════════ */
+.game-screen {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; flex-direction: column;
+  background: #ffffff;
+  animation: fadeIn 0.4s ease;
+}
+.game-screen.hidden { display: none; }
+
+.game-topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px;
+  padding-top: max(10px, env(safe-area-inset-top));
+  flex-shrink: 0; position: relative; z-index: 20;
+}
+.top-btn {
+  width: 38px; height: 38px; border-radius: var(--r-m);
+  background: #ffffff;
+  border: 1px solid var(--line);
+  color: var(--txt-1);
+  display: flex; align-items: center; justify-content: center;
+  transition: all var(--t-1);
+}
+.top-btn:hover { border-color: var(--line-strong); }
+.top-btn:active { transform: scale(0.92); }
+.top-btn svg { width: 18px; height: 18px; stroke-linecap: round; stroke-linejoin: round; }
+.chat-toggle.active {
+  background: var(--gold-soft);
+  border-color: #f4dcae;
+  color: var(--gold-2);
+}
+
+.topbar-right { display: flex; align-items: center; gap: 8px; position: relative; }
+
+.top-center {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 12px;
+  background: var(--gold-soft);
+  border: 1px solid #f4dcae;
+  border-radius: var(--r-full);
+  font-size: 10px; font-weight: 800; letter-spacing: 0.18em;
+  color: var(--gold-2);
+}
+
+/* Quick chat dropdown (opens on the right) */
+.chat-menu {
+  position: absolute; top: calc(100% + 10px); right: 0;
+  width: 200px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--r-m);
+  box-shadow: var(--shadow-3);
+  padding: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+  opacity: 0; visibility: hidden;
+  transform: translateX(10px) scale(0.96);
+  transform-origin: top right;
+  transition: opacity 0.2s var(--ease), transform 0.22s var(--ease), visibility 0.2s;
+  z-index: 100;
+  pointer-events: none;
+}
+.chat-menu.open {
+  opacity: 1; visibility: visible; pointer-events: auto;
+  transform: translateX(0) scale(1);
+}
+.chat-menu-head {
+  font-size: 9px; font-weight: 800; letter-spacing: 0.2em;
+  color: var(--txt-3);
+  padding: 6px 10px 4px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+.chat-item {
+  padding: 9px 10px;
+  text-align: left;
+  border-radius: var(--r-s);
+  font-size: 12px; font-weight: 700;
+  color: var(--txt-1);
+  transition: all var(--t-1);
+}
+.chat-item:hover { background: var(--gold-soft); color: var(--gold-2); }
+.chat-item:active { transform: scale(0.98); }
+
+.players-row { display: flex; gap: 8px; padding: 0 14px 8px; flex-shrink: 0; }
+.player-chip {
+  position: relative; flex: 1;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--r-m);
+  transition: all var(--t-2);
+}
+.player-chip.hidden-chip { display: none; }
+.player-chip.active {
+  background: var(--gold-soft);
+  border-color: #f4dcae;
+}
+.pc-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.pc-info { flex: 1; min-width: 0; }
+.pc-name {
+  font-size: 9px; font-weight: 800; letter-spacing: 0.1em;
+  color: var(--txt-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pc-score {
+  font-size: 16px; font-weight: 900;
+  color: var(--txt-1); line-height: 1;
+}
+
+.legend-row {
+  display: flex; justify-content: center; align-items: center; gap: 8px;
+  padding: 0 14px 8px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+  color: var(--txt-2); flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.legend-white { background: #f5ede0; border: 1px solid #d4c4a8; }
+.legend-black { background: #1a1a1a; }
+.legend-sep { color: var(--txt-3); opacity: 0.6; }
+.legend-hint { color: var(--txt-3); font-style: italic; }
+
+.board-wrap {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: 0 14px; min-height: 0;
+}
+.board-frame {
+  position: relative; width: 100%;
+  max-width: min(66vh, 480px);
+  aspect-ratio: 1;
+  border-radius: 14px;
+  background: #8b5a2b;
+  padding: 8px;
+  box-shadow: 0 10px 22px rgba(17,24,39,0.16);
+  animation: popIn 0.4s var(--ease);
+  transition: box-shadow var(--t-3);
+}
+.board-frame.active {
+  box-shadow: 0 10px 22px rgba(17,24,39,0.16), 0 0 0 4px rgba(217,154,16,0.22);
+}
+#gameCanvas {
+  display: block; width: 100%; height: 100%;
+  border-radius: 10px;
+  background: #fffdf6;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.wait-bar {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 9px 14px; margin: 8px 14px 0;
+  background: var(--gold-soft);
+  border: 1px solid #f4dcae;
+  border-radius: var(--r-full);
+  flex-shrink: 0;
+  animation: fadeIn 0.25s ease;
+}
+.wait-bar.hidden { display: none; }
+.wb-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--gold);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.wb-text {
+  font-size: 11px; font-weight: 800; letter-spacing: 0.12em;
+  color: var(--gold-2);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.adjust-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 6px 22px; flex-shrink: 0;
+  animation: fadeUp 0.25s var(--ease);
+}
+.adjust-row.hidden { display: none; }
+.adjust-label {
+  font-size: 9px; font-weight: 800; letter-spacing: 0.2em;
+  color: var(--gold-2); min-width: 30px;
+}
+.adjust-track {
+  position: relative; flex: 1; height: 24px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--r-full);
+  cursor: pointer;
+  touch-action: none;
+}
+.adjust-fill {
+  position: absolute; top: 50%; left: 0;
+  height: 2px; width: 50%;
+  transform: translateY(-50%);
+  background: var(--gold);
+  border-radius: var(--r-full); pointer-events: none;
+}
+.adjust-thumb {
+  position: absolute; top: 50%; left: 50%;
+  width: 22px; height: 22px; border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--gold);
+  box-shadow: 0 0 0 3px #ffffff, 0 3px 8px rgba(217,154,16,0.4);
+  pointer-events: none; z-index: 2;
+}
+.adjust-thumb::after {
+  content: ''; position: absolute; inset: 6px; border-radius: 50%;
+  background: #ffffff;
+}
+
+.power-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 22px;
+  opacity: 0.35;
+  transition: opacity var(--t-2);
+  flex-shrink: 0;
+}
+.power-row.active { opacity: 1; }
+.power-label { font-size: 9px; font-weight: 800; letter-spacing: 0.2em; color: var(--txt-3); }
+.power-track {
+  position: relative; flex: 1; height: 6px;
+  background: #eef1f5;
+  border-radius: var(--r-full);
+  overflow: hidden;
+}
+.power-fill {
+  position: absolute; inset: 0; width: 0%;
+  background: var(--gold);
+  border-radius: var(--r-full);
+  transition: width 0.08s linear;
+}
+
+.turn-row {
+  display: flex; align-items: center; justify-content: center;
+  gap: 10px; padding: 4px 14px 12px; flex-shrink: 0;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+}
+.turn-swatch {
+  width: 10px; height: 10px; border-radius: 50%;
+  transition: background var(--t-2);
+}
+.turn-label {
+  font-size: 12px; font-weight: 800; letter-spacing: 0.12em;
+  color: var(--txt-2);
+}
+
+.gameover {
+  position: absolute; inset: 0; z-index: 200;
+  background: rgba(255,255,255,0.9);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+  animation: fadeIn 0.3s ease;
+}
+.gameover.hidden { display: none; }
+.go-box {
+  text-align: center; max-width: 340px; width: 100%;
+  animation: popIn 0.4s var(--ease);
+}
+.go-icon {
+  font-size: 64px; margin-bottom: 10px;
+  animation: floatY 2.4s ease-in-out infinite;
+}
+.go-heading {
+  font-size: 32px; font-weight: 900;
+  color: var(--gold-2); margin-bottom: 4px;
+}
+.go-text { font-size: 13px; color: var(--txt-2); margin-bottom: 20px; font-weight: 600; }
+.go-scores { display: flex; justify-content: center; gap: 10px; margin-bottom: 20px; }
+.go-score {
+  padding: 10px 14px; background: #ffffff;
+  border: 1px solid var(--line); border-radius: var(--r-m);
+  min-width: 70px;
+  animation: slideInRight 0.35s var(--ease) backwards;
+}
+.go-score-val { font-size: 20px; font-weight: 900; line-height: 1; }
+.go-score-lbl {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.12em;
+  color: var(--txt-3); margin-top: 4px;
+}
+
+.ghost-btn {
+  width: 100%; padding: 12px;
+  background: #ffffff;
+  border: 1px solid var(--line-strong);
+  color: var(--txt-2);
+  border-radius: var(--r-l);
+  font-size: 12px; font-weight: 700; letter-spacing: 0.1em;
+  margin-top: 8px;
+  transition: all var(--t-1);
+}
+.ghost-btn:hover { color: var(--txt-1); border-color: var(--txt-3); }
+.ghost-btn:active { transform: scale(0.98); }
+
+/* ═══════════ TOASTS & CHAT ═══════════ */
+.toast-container {
+  position: fixed; top: 16px; right: 16px; z-index: 1000;
+  display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none;
+}
+.toast {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--r-m);
+  font-size: 12px; font-weight: 600;
+  color: var(--txt-1);
+  box-shadow: var(--shadow-2);
+  animation: toastIn 0.3s var(--ease);
+  max-width: 280px;
+  pointer-events: auto;
+}
+.toast.removing { animation: toastOut 0.25s var(--ease) forwards; }
+.toast.success { border-left: 3px solid var(--ok); }
+.toast.error { border-left: 3px solid var(--err); }
+.toast.info { border-left: 3px solid var(--gold); }
+.toast-icon { font-size: 14px; }
+
+.chat-layer {
+  position: fixed; inset: 0;
+  pointer-events: none; z-index: 900;
+  overflow: hidden;
+}
+.chat-bubble {
+  position: absolute; bottom: 130px;
+  padding: 10px 18px;
+  background: var(--gold);
+  color: #ffffff;
+  font-size: 15px; font-weight: 800; letter-spacing: 0.02em;
+  border-radius: 20px;
+  box-shadow: 0 4px 14px rgba(217,154,16,0.4);
+  white-space: nowrap;
+  animation: chatBubbleFloat 4s ease-out forwards;
+  will-change: transform, opacity;
+}
+
+.hidden { display: none !important; }
+
+.confetti {
+  position: fixed; width: 10px; height: 10px;
+  top: -20px; z-index: 999;
+  pointer-events: none;
+  animation: confettiFall 3s linear forwards;
+}
+
+/* ═══════════ RESPONSIVE ═══════════ */
+@media (max-width: 420px) {
+  .opening-title { font-size: 42px; }
+  .menu-title { font-size: 32px; }
+  .code-big { font-size: 30px; }
+  .modal-box { padding: 20px 16px; }
+  .go-heading { font-size: 26px; }
+  .go-icon { font-size: 54px; }
+  .digit-input { width: 44px; height: 54px; font-size: 22px; }
+  .chat-bubble { font-size: 14px; padding: 8px 14px; }
+  .legend-row { font-size: 9px; gap: 6px; }
+}
+@media (max-height: 720px) {
+  .board-wrap { padding: 0 10px; }
+  .players-row { padding-bottom: 6px; }
+  .turn-row { padding-bottom: 8px; }
+  .adjust-row { padding: 4px 18px; }
+  .power-row { padding: 5px 18px; }
+  .wait-bar { padding: 7px 12px; }
+  .legend-row { padding-bottom: 6px; }
+}
+@media (orientation: landscape) and (max-height: 500px) {
+  .board-frame { max-width: min(78vh, 380px); }
+  .players-row { display: none; }
+  .legend-row { display: none; }
+}
+@media (hover: none) {
+  .action-primary:hover { transform: none; }
+  .top-btn:hover { transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(17,24,39,0.12); border-radius: 3px; }
+::selection { background: rgba(217,154,16,0.25); color: var(--txt-1); }
+button:focus-visible, input:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
