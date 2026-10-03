@@ -1,15 +1,11 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P • v13
-   • Score/pocket: events collected by Physics and drained once
-     per frame in Game.loop (fixes double count & wrong player)
-   • Clients do NOT simulate — host is authoritative
-   • Heartbeat ping/pong keeps player list accurate
-   • Late-join gets an initial sync_state in the welcome
-   • Chat echoes through the host (no false local bubble)
-   • Slight force reduction (MAX_POWER 23, restitution 0.93)
-   • Mass ~ r² in collision resolution
-   • Turn and pocket counters snap cleanly even on same-frame
-     striker stop + puck drop
+   CARROM 3 PLAYER
+   • Board / puck / striker visuals: original warm-carrom look
+   • Score credited to the shooter of the turn (no double count)
+   • Client is a renderer — host is the physics authority
+   • Heartbeat ping/pong, late-join snapshot, chat echo
+   • MAX_POWER 23, restitution 0.93, mass ~ r²
+   • 2P local: second player uses top baseline (teal)
 ═══════════════════════════════════════════════════════════ */
 
 const WIN_SCORE = 100;
@@ -165,16 +161,16 @@ const AudioManager = {
 const Network = {
   peer: null, connections: [], isHost: false, roomCode: null,
   onData: null, onError: null, onPeerJoin: null, onPeerLeave: null,
-  _lastPingSent: 0, _lastPingReceived: 0, _pingTimer: null,
+  _pingTimer: null, _lastPingReceived: 0,
 
   generateCode() { return String(Math.floor(1000 + Math.random() * 9000)); },
-  generateClientId() { return 'c13-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
+  generateClientId() { return 'carrom-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
 
   initHost(cb) {
     this.isHost = true;
     this.roomCode = this.generateCode();
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const peerId = 'c13-' + this.roomCode;
+    const peerId = 'carrom3p-' + this.roomCode;
     return new Promise((resolve, reject) => {
       let settled = false, attempts = 0;
       const maxAttempts = 6;
@@ -221,7 +217,7 @@ const Network = {
     this.isHost = false;
     this.roomCode = roomCode;
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const hostPeerId = 'c13-' + roomCode;
+    const hostPeerId = 'carrom3p-' + roomCode;
     const clientId = this.generateClientId();
     return new Promise((resolve, reject) => {
       let settled = false, retries = 0;
@@ -299,12 +295,9 @@ const Network = {
     this._pingTimer = setInterval(() => {
       if (!this.connections.length) return;
       this.broadcast({ type: 'ping', t: Date.now() });
-      /* Detect host silence on client side */
-      if (!this.isHost) {
+      if (!this.isHost && this._lastPingReceived > 0) {
         const gap = Date.now() - this._lastPingReceived;
-        if (this._lastPingReceived > 0 && gap > 8000) {
-          if (this.onError) this.onError(new Error('heartbeat-lost'));
-        }
+        if (gap > 8000 && this.onError) this.onError(new Error('heartbeat-lost'));
       }
     }, 3000);
   },
@@ -313,7 +306,6 @@ const Network = {
     conn.on('open', () => {
       if (!this.connections.includes(conn)) this.connections.push(conn);
       AudioManager.play('connect');
-      /* fire onPeerJoin on raw open, but the app waits for 'hello' before ready */
       if (this.onPeerJoin) this.onPeerJoin(conn);
     });
     conn.on('data', d => { if (this.onData) this.onData(d, conn); });
@@ -324,11 +316,9 @@ const Network = {
     conn.on('error', e => console.error('host conn error:', e));
   },
 
-  /* Rebuild connection list from live peers (used after reconnect) */
   resyncConnections() {
     this.connections = this.connections.filter(c => c && c.open);
   },
-
   broadcast(data) {
     this.resyncConnections();
     this.connections.forEach(c => {
@@ -400,6 +390,7 @@ const Physics = {
     return playerIndex;
   },
 
+  /* ── original warm-carrom puck set ── */
   createPucks() {
     const pucks = [];
     const cx = this.W / 2, cy = this.H / 2;
@@ -409,8 +400,9 @@ const Physics = {
       pucks.push({
         x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r,
         vx: 0, vy: 0, radius: this.PUCK_RADIUS,
-        color: '#ffffff', rim: '#c9c9c9', cap: '#f3f3f3', innerDot: '#bdbdbd',
-        type: 'white', points: POINTS.white, active: true, pocketed: false, trail: []
+        color: '#f5ede0', rim: '#d4c4a8',
+        type: 'white', points: POINTS.white,
+        active: true, pocketed: false, trail: []
       });
     }
     for (let i = 0; i < 9; i++) {
@@ -419,14 +411,16 @@ const Physics = {
       pucks.push({
         x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r,
         vx: 0, vy: 0, radius: this.PUCK_RADIUS,
-        color: '#1a1a1a', rim: '#000', cap: '#3a3a3a', innerDot: '#cfcfcf',
-        type: 'black', points: POINTS.black, active: true, pocketed: false, trail: []
+        color: '#1a1a1a', rim: '#000000',
+        type: 'black', points: POINTS.black,
+        active: true, pocketed: false, trail: []
       });
     }
     pucks.push({
       x: cx, y: cy, vx: 0, vy: 0, radius: this.PUCK_RADIUS,
-      color: '#ffffff', rim: '#c9c9c9', cap: '#f3f3f3', innerDot: '#bdbdbd',
-      type: 'white', points: POINTS.white, active: true, pocketed: false, trail: []
+      color: '#f5ede0', rim: '#d4c4a8',
+      type: 'white', points: POINTS.white,
+      active: true, pocketed: false, trail: []
     });
     return pucks;
   },
@@ -535,7 +529,6 @@ const Physics = {
     const dvx = b.vx - a.vx, dvy = b.vy - a.vy;
     const vn = dvx * nx + dvy * ny;
     if (vn > 0) return;
-    /* mass ∝ area ∝ radius² */
     const invA = 1 / (a.radius * a.radius);
     const invB = 1 / (b.radius * b.radius);
     const j = -(1 + this.RESTITUTION) * vn / (invA + invB);
@@ -613,8 +606,6 @@ const Physics = {
     if (hitWall && onWall) onWall(body, wallSpeed);
   },
 
-  /* Collect pocket events instead of firing callbacks per frame.
-     Game.loop drains this array once per frame. */
   checkPockets(body, onPocket, isStriker) {
     if (body.pocketed || !body.active) return false;
     for (const p of this.pockets) {
@@ -654,7 +645,6 @@ const Physics = {
     return false;
   },
 
-  /* Force any active body that is basically on top of a pocket into it. */
   forcePocketIfTouching() {
     const R = this.POCKET_RADIUS * 0.9;
     const tryBody = (body, isStriker) => {
@@ -717,7 +707,7 @@ const Physics = {
   }
 };
 
-/* ───────── RENDERER (unchanged from v12) ───────── */
+/* ───────── RENDERER — original warm-carrom look ───────── */
 const Renderer = {
   canvas: null, ctx: null, W: 700, H: 700, time: 0, pocketPops: [],
 
@@ -746,24 +736,29 @@ const Renderer = {
     const b = Physics.bounds();
     const w = b.right - b.left, h = b.bottom - b.top;
 
+    /* Wooden frame */
     ctx.fillStyle = '#8b5a2b';
     ctx.fillRect(0, 0, this.W, this.H);
 
+    /* Grain lines */
     ctx.fillStyle = 'rgba(0,0,0,0.08)';
     for (let i = 0; i < 7; i++) ctx.fillRect(0, 8 + i * 10, this.W, 1.5);
     for (let i = 0; i < 7; i++) ctx.fillRect(0, this.H - 8 - i * 10, this.W, 1.5);
     for (let i = 0; i < 5; i++) ctx.fillRect(8 + i * 10, 0, 1.5, this.H);
     for (let i = 0; i < 5; i++) ctx.fillRect(this.W - 8 - i * 10, 0, 1.5, this.H);
 
+    /* Play surface (cream) */
     ctx.fillStyle = '#f4dcae';
     ctx.fillRect(p - 6, p - 6, w + 12, h + 12);
     ctx.fillStyle = '#f8e7c4';
     ctx.fillRect(b.left, b.top, w, h);
 
+    /* Outer border */
     ctx.strokeStyle = '#6b4423';
     ctx.lineWidth = 2.5;
     ctx.strokeRect(b.left + 1.25, b.top + 1.25, w - 2.5, h - 2.5);
 
+    /* Inner decorative rect */
     const ins = Physics.innerRect();
     const iw = ins.right - ins.left, ih = ins.bottom - ins.top;
     ctx.strokeStyle = '#8a5a20';
@@ -773,6 +768,7 @@ const Renderer = {
     ctx.lineWidth = 1;
     ctx.strokeRect(ins.left + 6, ins.top + 6, iw - 12, ih - 12);
 
+    /* Corner arcs */
     const cornerR = 40;
     const drawArcIn = (cx, cy, s, e) => {
       ctx.beginPath();
@@ -786,6 +782,7 @@ const Renderer = {
     drawArcIn(ins.right, ins.bottom, Math.PI,       Math.PI * 1.5);
     drawArcIn(ins.left,  ins.bottom, Math.PI * 1.5, Math.PI * 2);
 
+    /* Centre circle + sun */
     ctx.beginPath();
     ctx.arc(this.W / 2, this.H / 2, 74, 0, Math.PI * 2);
     ctx.strokeStyle = '#8a5a20';
@@ -811,6 +808,7 @@ const Renderer = {
     ctx.fillStyle = '#8a5a20';
     ctx.fill();
 
+    /* Base-line sight rings */
     const is2P = GAME.mode === 'local' && GAME.localMode === 'local2p';
     const slotCount = is2P ? 2 : GAME.activePlayers;
     for (let pi = 0; pi < slotCount; pi++) {
@@ -828,6 +826,7 @@ const Renderer = {
       ctx.globalAlpha = 1;
     }
 
+    /* Pockets */
     for (const pk of Physics.pockets) {
       ctx.beginPath();
       ctx.arc(pk.x, pk.y, Physics.POCKET_RADIUS + 3, 0, Math.PI * 2);
@@ -886,6 +885,7 @@ const Renderer = {
     }
   },
 
+  /* Original puck rendering: cream body, tan rim, centre dot */
   drawPucks() {
     const ctx = this.ctx;
     for (const puck of Physics.pucks) {
@@ -893,37 +893,40 @@ const Renderer = {
       const r = puck.radius;
 
       ctx.beginPath();
-      ctx.ellipse(puck.x, puck.y + r * 0.55, r * 0.95, r * 0.35, 0, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(80, 55, 20, 0.18)';
+      ctx.arc(puck.x, puck.y + 2, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
       ctx.fill();
 
       ctx.beginPath(); ctx.arc(puck.x, puck.y, r, 0, Math.PI * 2);
       ctx.fillStyle = puck.color; ctx.fill();
-      ctx.beginPath(); ctx.arc(puck.x, puck.y, r - 0.4, 0, Math.PI * 2);
-      ctx.strokeStyle = puck.rim; ctx.lineWidth = 1.4; ctx.stroke();
 
-      ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.66, 0, Math.PI * 2);
-      ctx.strokeStyle = puck.type === 'white' ? '#c0c0c0' : '#3a3a3a';
-      ctx.lineWidth = 1.2; ctx.stroke();
+      ctx.beginPath(); ctx.arc(puck.x, puck.y, r, 0, Math.PI * 2);
+      ctx.strokeStyle = puck.rim; ctx.lineWidth = 1.6; ctx.stroke();
 
-      ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.42, 0, Math.PI * 2);
-      ctx.fillStyle = puck.cap; ctx.fill();
-      ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.42, 0, Math.PI * 2);
-      ctx.strokeStyle = puck.type === 'white' ? '#b8b8b8' : '#1a1a1a';
-      ctx.lineWidth = 0.9; ctx.stroke();
-
-      ctx.beginPath(); ctx.arc(puck.x, puck.y, 2, 0, Math.PI * 2);
-      ctx.fillStyle = puck.innerDot; ctx.fill();
-
+      /* soft highlight */
       ctx.beginPath();
-      ctx.arc(puck.x, puck.y, r * 0.85, Math.PI * 1.15, Math.PI * 1.55);
+      ctx.arc(puck.x - r * 0.35, puck.y - r * 0.35, r * 0.55, 0, Math.PI * 2);
+      ctx.fillStyle = puck.type === 'white'
+        ? 'rgba(255,255,255,0.55)'
+        : 'rgba(255,255,255,0.06)';
+      ctx.fill();
+
+      /* inner ring */
+      ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.5, 0, Math.PI * 2);
       ctx.strokeStyle = puck.type === 'white'
-        ? 'rgba(255,255,255,0.95)'
-        : 'rgba(255,255,255,0.22)';
-      ctx.lineWidth = 1.6; ctx.stroke();
+        ? 'rgba(180, 150, 100, 0.35)'
+        : 'rgba(255,255,255,0.08)';
+      ctx.lineWidth = 1; ctx.stroke();
+
+      /* centre dot */
+      ctx.beginPath(); ctx.arc(puck.x, puck.y, 2, 0, Math.PI * 2);
+      ctx.fillStyle = puck.type === 'white' ? '#d4c4a8' : '#3a3a3a';
+      ctx.fill();
     }
   },
 
+  /* Original striker rendering: coloured disc, white outer ring,
+     white inner disc, coloured centre dot, top-left highlight */
   drawStriker() {
     const s = Physics.striker;
     if (!s || !s.active) return;
@@ -936,38 +939,38 @@ const Renderer = {
     if (!isMoving && isMyTurn && GAME.mode !== 'menu') {
       const pulse = 0.5 + Math.sin(this.time * 4) * 0.5;
       ctx.beginPath();
-      ctx.arc(s.x, s.y, r + 6 + pulse * 2, 0, Math.PI * 2);
-      ctx.strokeStyle = s.color;
-      ctx.globalAlpha = 0.35 + pulse * 0.25;
-      ctx.lineWidth = 2; ctx.stroke();
-      ctx.globalAlpha = 1;
+      ctx.arc(s.x, s.y, r + 10, 0, Math.PI * 2);
+      const grd = ctx.createRadialGradient(s.x, s.y, r, s.x, s.y, r + 10);
+      grd.addColorStop(0, s.color + '00');
+      grd.addColorStop(0.5, s.color + Math.floor((0.3 + pulse * 0.3) * 255).toString(16).padStart(2, '0'));
+      grd.addColorStop(1, s.color + '00');
+      ctx.fillStyle = grd; ctx.fill();
     }
 
-    ctx.beginPath();
-    ctx.ellipse(s.x, s.y + r * 0.55, r * 0.95, r * 0.35, 0, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(80, 55, 20, 0.25)';
-    ctx.fill();
+    ctx.beginPath(); ctx.arc(s.x, s.y + 3, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fill();
 
     ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
     ctx.fillStyle = s.color; ctx.fill();
-    ctx.beginPath(); ctx.arc(s.x, s.y, r - 0.6, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1.5; ctx.stroke();
 
-    ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.72, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 1.4; ctx.stroke();
-
-    ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.5, 0, Math.PI * 2);
-    ctx.fillStyle = '#ffffff'; ctx.fill();
-    ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.5, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 1; ctx.stroke();
-
-    ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.22, 0, Math.PI * 2);
-    ctx.fillStyle = s.color; ctx.fill();
-
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, r * 0.85, Math.PI * 1.15, Math.PI * 1.55);
-    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
     ctx.lineWidth = 2; ctx.stroke();
+
+    /* highlight */
+    ctx.beginPath();
+    ctx.arc(s.x - r * 0.35, s.y - r * 0.35, r * 0.55, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fill();
+
+    /* inner white ring */
+    ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.62, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 2; ctx.stroke();
+
+    /* centre highlight dot */
+    ctx.beginPath(); ctx.arc(s.x, s.y, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fill();
   },
 
   drawPocketPops() {
@@ -1118,7 +1121,6 @@ const Input = {
     s.vx = Math.cos(angle) * power;
     s.vy = Math.sin(angle) * power;
     AudioManager.play('shoot');
-    /* Freeze the shooter BEFORE the shot runs */
     Game.currentTurnAtShot = GAME.currentTurn;
     Game.turnHadFoul = false;
     Game.turnPocketed = 0;
@@ -1169,7 +1171,6 @@ const Game = {
     this.loop(this.lastTime);
   },
 
-  /* Is this device the physics authority? */
   isAuthority() {
     if (GAME.mode === 'local' || GAME.isPractice) return true;
     if (GAME.mode === 'playing') return GAME.isHost;
@@ -1194,7 +1195,7 @@ const Game = {
           else if (intensity > 0.35) AudioManager.play('puck_hit_med', { pan, volume: Math.min(intensity + 0.15, 0.9) });
           else AudioManager.play('puck_hit_soft', { pan, volume: Math.min(intensity + 0.3, 0.8) });
         },
-        () => { /* handled by drainPocketEvents in loop */ },
+        () => {},
         (body, wallSpeed) => {
           const pan = (body.x / Physics.W) * 2 - 1;
           const v = Math.min(wallSpeed / 14, 1);
@@ -1212,8 +1213,6 @@ const Game = {
           }
         }
       );
-      /* Drain pocket events once, after physics, so no double-count and
-         the shooter credit is stable. */
       this.drainPockets();
     }
 
@@ -1224,7 +1223,6 @@ const Game = {
       }
       const fullyStopped = Physics.allStopped();
       if (fullyStopped || elapsed > 12000) {
-        /* Last chance to catch a puck that stopped on the rim */
         Physics.forcePocketIfTouching();
         this.drainPockets();
         this.isResolving = false;
@@ -1240,7 +1238,6 @@ const Game = {
       }
     }
 
-    /* Host: broadcast state while shot is active */
     if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
       const moving = !Physics.allStopped();
       if (moving || this.isResolving) {
@@ -1272,7 +1269,6 @@ const Game = {
   drainPockets() {
     const events = Physics.drainPocketEvents();
     if (!events.length) return;
-    /* Credit goes to the shooter of this turn. */
     const shooter = this.currentTurnAtShot;
     for (const ev of events) {
       const { body, pocket, isStriker } = ev;
@@ -1733,7 +1729,6 @@ const UI = {
           playerIndex: slot,
           players: GAME.players,
           roomCode: GAME.roomCode,
-          /* Late-join initial snapshot so nothing flickers */
           snapshot: Physics.snapshot(),
           currentTurn: GAME.currentTurn
         });
@@ -1751,10 +1746,7 @@ const UI = {
         if (typeof data.currentTurn === 'number') GAME.currentTurn = data.currentTurn;
         document.getElementById('connectingOverlay').classList.add('hidden');
         Toast.show('Connected as ' + playerLabel(GAME.myPlayerIndex), 'success', '🎉');
-        setTimeout(() => {
-          Game.updateScores();
-          Game.updateTurnUI();
-        }, 100);
+        setTimeout(() => { Game.updateScores(); Game.updateTurnUI(); }, 100);
         break;
       case 'room_full':
         document.getElementById('connectingOverlay').classList.add('hidden');
@@ -1799,7 +1791,6 @@ const UI = {
         Game.currentTurnAtShot = GAME.currentTurn;
         Game.isResolving = false;
         Game.updateScores(); Game.updateTurnUI(); Game.updateAdjustSlider(); Game.updateWaitBar();
-        /* If the local player was dragging when the turn changed, re-broadcast */
         if (Physics.striker && GAME.currentTurn === GAME.myPlayerIndex) {
           Network.broadcast({ type: 'striker_move', player: GAME.myPlayerIndex, x: Physics.striker.x, y: Physics.striker.y });
         }
@@ -2020,7 +2011,6 @@ const UI = {
     if (GAME.mode === 'local' || GAME.isPractice) {
       this.showMessage(text);
     } else if (GAME.mode === 'playing') {
-      /* Echo through host so we know it was delivered, and no double-render */
       Network.broadcast({ type: 'chat_message', text, player: GAME.myPlayerIndex });
     } else {
       this.showMessage(text);
