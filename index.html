@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800;900&family=Space+Mono:wght@700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-  <link rel="stylesheet" href="style.css?v=15">
+  <link rel="stylesheet" href="style.css?v=16">
 </head>
 <body>
 
@@ -177,7 +177,7 @@
   <!-- ═══════════ GAME SCREEN ═══════════ -->
   <div id="gameScreen" class="game-screen hidden">
 
-    <!-- TOP BAR -->
+    <!-- TOP BAR (online only; hidden in local modes) -->
     <div class="game-topbar" id="gameTopbar">
       <button class="top-btn" id="backBtn" aria-label="Back">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
@@ -209,7 +209,6 @@
           </svg>
         </button>
 
-        <!-- QUICK CHAT DROPDOWN -->
         <div class="chat-menu" id="chatMenu">
           <div class="chat-menu-head">QUICK CHAT</div>
           <button class="chat-item" data-msg="Great Shot!">Great Shot!</button>
@@ -221,48 +220,43 @@
       </div>
     </div>
 
-    <!-- ─────── FRIEND ZONE (top, rotated for the friend) ─────── -->
-    <div class="friend-zone hidden" id="friendZone">
-
-      <!-- Friend chip (name + score) -->
-      <div class="side-chip rotated-180" id="friendChip">
-        <span class="sc-dot" id="friendChipDot" style="background:#2a9d8f"></span>
-        <span class="sc-name" id="friendChipName">P2</span>
-        <span class="sc-score" id="friendChipScore">0</span>
-      </div>
-
-      <!-- Friend's striker adjust slider (rotated) -->
-      <div class="adjust-row rotated-180 hidden" id="friendAdjustRow">
-        <span class="adjust-label" id="friendAdjustLabel">POS</span>
-        <div class="adjust-track" id="friendAdjustTrack">
-          <div class="adjust-fill" id="friendAdjustFill"></div>
-          <div class="adjust-thumb" id="friendAdjustThumb"></div>
+    <!-- ═══════════════════════════════════════
+         PLAYER HUD — TOP (for P2 in local 2P; hidden elsewhere)
+         ═══════════════════════════════════════ -->
+    <div class="hud hud-top hidden" id="hudTop">
+      <div class="hud-inner" id="hudTopInner">
+        <div class="hud-chip" id="topChip">
+          <span class="hud-dot" id="topChipDot" style="background:#2a9d8f"></span>
+          <span class="hud-name" id="topChipName">P2</span>
+          <span class="hud-score" id="topChipScore">0</span>
         </div>
-      </div>
-
-      <!-- Friend's power bar (rotated) -->
-      <div class="power-row rotated-180" id="friendPowerRow">
-        <span class="power-label">PWR</span>
-        <div class="power-track"><div class="power-fill" id="friendPowerFill"></div></div>
-      </div>
-
-      <!-- Friend's sound/mute toggle (rotated) -->
-      <div class="friend-controls rotated-180">
-        <button class="top-btn" id="friendSoundToggle" aria-label="Sound">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="friendSoundOnIcon">
-            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-            <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
-          </svg>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="friendSoundOffIcon" style="display:none">
-            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-            <line x1="23" y1="9" x2="17" y2="15"/>
-            <line x1="17" y1="9" x2="23" y2="15"/>
-          </svg>
-        </button>
+        <div class="hud-buttons">
+          <button class="hud-btn" id="topMuteBtn" aria-label="Sound">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="topMuteOnIcon">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+            </svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="topMuteOffIcon" style="display:none">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              <line x1="23" y1="9" x2="17" y2="15"/>
+              <line x1="17" y1="9" x2="23" y2="15"/>
+            </svg>
+          </button>
+          <button class="hud-btn" id="topFsBtn" aria-label="Fullscreen">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3"/>
+              <path d="M21 8V5a2 2 0 0 0-2-2h-3"/>
+              <path d="M3 16v3a2 2 0 0 0 2 2h3"/>
+              <path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
 
-    <!-- ─────── PLAYER SCORES ROW (online only) ─────── -->
+    <!-- ═══════════════════════════════════════
+         ONLINE PLAYERS ROW (hidden in local modes)
+         ═══════════════════════════════════════ -->
     <div class="players-row" id="playersRow">
       <div class="player-chip p1-chip active" data-p="0">
         <span class="pc-dot" style="background:#e63946"></span>
@@ -287,7 +281,9 @@
       </div>
     </div>
 
-    <!-- POINTS LEGEND (online only) -->
+    <!-- ═══════════════════════════════════════
+         LEGEND (online only)
+         ═══════════════════════════════════════ -->
     <div class="legend-row" id="legendRow">
       <span class="legend-item"><span class="legend-dot legend-white"></span>White 20</span>
       <span class="legend-sep">•</span>
@@ -298,30 +294,40 @@
       <span class="legend-item legend-hint">Striker foul −20</span>
     </div>
 
-    <!-- ─────── BOARD ─────── -->
+    <!-- ═══════════════════════════════════════
+         FRIEND (P2) ADJUSTER + POWER (local 2P only, shown when P2's turn)
+         ═══════════════════════════════════════ -->
+    <div class="adjust-row hidden" id="friendAdjustRow">
+      <span class="adjust-label">POS</span>
+      <div class="adjust-track" id="friendAdjustTrack">
+        <div class="adjust-fill" id="friendAdjustFill"></div>
+        <div class="adjust-thumb" id="friendAdjustThumb"></div>
+      </div>
+    </div>
+
+    <div class="power-row" id="friendPowerRow">
+      <span class="power-label">PWR</span>
+      <div class="power-track"><div class="power-fill" id="friendPowerFill"></div></div>
+    </div>
+
+    <!-- ═══════════════════════════════════════
+         BOARD
+         ═══════════════════════════════════════ -->
     <div class="board-wrap">
       <div class="board-frame" id="boardFrame">
         <canvas id="gameCanvas" width="700" height="700"></canvas>
       </div>
     </div>
 
-    <!-- ─────── YOUR ZONE (bottom) ─────── -->
+    <!-- ═══════════════════════════════════════
+         YOU ZONE (local + online)
+         ═══════════════════════════════════════ -->
     <div class="you-zone" id="youZone">
-
-      <!-- Your chip (name + score) -->
-      <div class="side-chip" id="youChip">
-        <span class="sc-dot" id="youChipDot" style="background:#e63946"></span>
-        <span class="sc-name" id="youChipName">YOU</span>
-        <span class="sc-score" id="youChipScore">0</span>
-      </div>
-
-      <!-- Wait bar (online) -->
       <div class="wait-bar hidden" id="waitBar">
         <span class="wb-dot"></span>
         <span class="wb-text" id="waitBarText">P2 is playing…</span>
       </div>
 
-      <!-- Your striker adjust slider -->
       <div class="adjust-row hidden" id="adjustRow">
         <span class="adjust-label">POS</span>
         <div class="adjust-track" id="adjustTrack">
@@ -330,10 +336,43 @@
         </div>
       </div>
 
-      <!-- Your power bar -->
       <div class="power-row" id="powerRow">
         <span class="power-label">PWR</span>
         <div class="power-track"><div class="power-fill" id="powerFill"></div></div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════
+         PLAYER HUD — BOTTOM (for P1 in local 2P; also shown in 3P local)
+         ═══════════════════════════════════════ -->
+    <div class="hud hud-bottom hidden" id="hudBottom">
+      <div class="hud-inner" id="hudBottomInner">
+        <div class="hud-chip" id="bottomChip">
+          <span class="hud-dot" id="bottomChipDot" style="background:#e63946"></span>
+          <span class="hud-name" id="bottomChipName">YOU</span>
+          <span class="hud-score" id="bottomChipScore">0</span>
+        </div>
+        <div class="hud-buttons">
+          <button class="hud-btn" id="bottomMuteBtn" aria-label="Sound">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="bottomMuteOnIcon">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+            </svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" id="bottomMuteOffIcon" style="display:none">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              <line x1="23" y1="9" x2="17" y2="15"/>
+              <line x1="17" y1="9" x2="23" y2="15"/>
+            </svg>
+          </button>
+          <button class="hud-btn" id="bottomFsBtn" aria-label="Fullscreen">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3"/>
+              <path d="M21 8V5a2 2 0 0 0-2-2h-3"/>
+              <path d="M3 16v3a2 2 0 0 0 2 2h3"/>
+              <path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -354,6 +393,6 @@
   <div id="toastContainer" class="toast-container"></div>
   <div id="chatLayer" class="chat-layer"></div>
 
-  <script src="script.js?v=15"></script>
+  <script src="script.js?v=16"></script>
 </body>
 </html>
