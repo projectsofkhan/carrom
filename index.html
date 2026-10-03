@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800;900&family=Space+Mono:wght@700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-  <link rel="stylesheet" href="style.css?v=13">
+  <link rel="stylesheet" href="style.css?v=14">
 </head>
 <body>
 
@@ -177,8 +177,8 @@
   <!-- ═══════════ GAME SCREEN ═══════════ -->
   <div id="gameScreen" class="game-screen hidden">
 
-    <!-- TOP BAR -->
-    <div class="game-topbar">
+    <!-- TOP BAR (only shown in online mode; simplified in local 2P) -->
+    <div class="game-topbar" id="gameTopbar">
       <button class="top-btn" id="backBtn" aria-label="Back">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
           <polyline points="15 18 9 12 15 6"/>
@@ -221,8 +221,15 @@
       </div>
     </div>
 
-    <!-- PLAYER SCORES -->
-    <div class="players-row">
+    <!-- FRIEND (P2) CHIP — TOP, only shown in local 2P / 3P -->
+    <div class="side-chip side-chip-friend hidden" id="friendChip">
+      <span class="sc-dot" id="friendChipDot" style="background:#2a9d8f"></span>
+      <span class="sc-name" id="friendChipName">P2</span>
+      <span class="sc-score" id="friendChipScore">0</span>
+    </div>
+
+    <!-- PLAYER SCORES ROW — hidden in local modes, shown online -->
+    <div class="players-row" id="playersRow">
       <div class="player-chip p1-chip active" data-p="0">
         <span class="pc-dot" style="background:#e63946"></span>
         <div class="pc-info">
@@ -291,6 +298,12 @@
       <span class="turn-label" id="turnLabel">Your turn</span>
     </div>
 
+    <!-- FRIEND (P2) TURN INDICATOR — BOTTOM, rotated so P2 can read it -->
+    <div class="side-turn side-turn-friend hidden" id="friendTurnRow">
+      <span class="st-swatch" id="friendTurnSwatch"></span>
+      <span class="st-label" id="friendTurnLabel">P2's turn</span>
+    </div>
+
     <!-- GAME OVER OVERLAY -->
     <div id="gameOverOverlay" class="gameover hidden">
       <div class="go-box">
@@ -308,6 +321,6 @@
   <div id="toastContainer" class="toast-container"></div>
   <div id="chatLayer" class="chat-layer"></div>
 
-  <script src="script.js?v=13"></script>
+  <script src="script.js?v=14"></script>
 </body>
 </html>
