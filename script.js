@@ -1,10 +1,13 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P • v14
-   • Host-authoritative physics (kept from v13)
-   • Faster turn handoff (near-instant)
-   • Local 2P split layout — top chip rotated 180° for friend
-   • Chat button hidden in local modes
-   • 3P local: chips at top + bottom (no rotation)
+   CARROM 3P • v15
+   • Host-authoritative physics (kept from v13/v14)
+   • Rotated UI for the friend in local 2P (chips, adjuster,
+     power bar, mute button, floating points & toasts)
+   • Both sides have a mute button
+   • Friend has their own striker adjuster + power bar
+   • Very-low-energy striker ends the turn immediately
+   • Removed the redundant bottom "Your turn" line
+   • Chip shows name+score for both players
 ═══════════════════════════════════════════════════════════ */
 
 const WIN_SCORE = 100;
@@ -40,6 +43,12 @@ function isAuthority() {
 function isLocalMode() {
   return GAME.mode === 'local' || GAME.mode === 'practice';
 }
+function is2PLocal() {
+  return GAME.mode === 'local' && GAME.localMode === 'local2p';
+}
+function is3PLocal() {
+  return GAME.mode === 'local' && GAME.localMode === 'practice3p';
+}
 
 /* ───────── AUDIO ───────── */
 const AudioManager = {
@@ -68,7 +77,7 @@ const AudioManager = {
     if (ctx.createStereoPanner) {
       const p = ctx.createStereoPanner();
       p.pan.value = pan;
-      g.connect(p); p.connect(this._master || ctx.destination);
+      g.connect(p); g.connect(this._master || ctx.destination);
     } else g.connect(this._master || ctx.destination);
     return g;
   },
@@ -171,13 +180,13 @@ const Network = {
   onData: null, onError: null, onPeerJoin: null, onPeerLeave: null,
 
   generateCode() { return String(Math.floor(1000 + Math.random() * 9000)); },
-  generateClientId() { return 'c14-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
+  generateClientId() { return 'c15-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
 
   initHost(cb) {
     this.isHost = true;
     this.roomCode = this.generateCode();
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const peerId = 'c14-' + this.roomCode;
+    const peerId = 'c15-' + this.roomCode;
     return new Promise((resolve, reject) => {
       let settled = false, attempts = 0;
       const maxAttempts = 6;
@@ -224,7 +233,7 @@ const Network = {
     this.isHost = false;
     this.roomCode = roomCode;
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const hostPeerId = 'c14-' + roomCode;
+    const hostPeerId = 'c15-' + roomCode;
     const clientId = this.generateClientId();
     return new Promise((resolve, reject) => {
       let settled = false, retries = 0;
@@ -332,6 +341,7 @@ const Physics = {
   WALL_BOUNCE: 0.8,
   MIN_SPEED: 0.05,
   ALMOST_STOP_SPEED: 0.35,
+  DEAD_STRIKER_SPEED: 0.5,
   MAX_POWER: 26,
   RESTITUTION: 0.94,
 
@@ -370,10 +380,7 @@ const Physics = {
   },
 
   slotForPlayer(playerIndex) {
-    /* 2P local: P1 at bottom (slot 0), P2 at top (slot 2) */
-    if (GAME.mode === 'local' && GAME.localMode === 'local2p') {
-      return playerIndex === 0 ? 0 : 2;
-    }
+    if (is2PLocal()) return playerIndex === 0 ? 0 : 2;
     return playerIndex;
   },
 
@@ -627,6 +634,19 @@ const Physics = {
     return true;
   },
 
+  /* All non-striker bodies effectively stopped AND striker below the dead
+     threshold → caller can end the turn immediately. */
+  strikerAlmostDead() {
+    if (this.striker && this.striker.active) {
+      const sp = Math.hypot(this.striker.vx, this.striker.vy);
+      if (sp > this.DEAD_STRIKER_SPEED) return false;
+    }
+    for (const p of this.pucks) {
+      if (p.active && Math.hypot(p.vx, p.vy) > this.MIN_SPEED) return false;
+    }
+    return true;
+  },
+
   almostStopped() {
     const th = this.ALMOST_STOP_SPEED;
     if (this.striker && this.striker.active && Math.hypot(this.striker.vx, this.striker.vy) > th) return false;
@@ -757,8 +777,7 @@ const Renderer = {
     ctx.fillStyle = '#8a5a20';
     ctx.fill();
 
-    const is2P = GAME.mode === 'local' && GAME.localMode === 'local2p';
-    const slotCount = is2P ? 2 : GAME.activePlayers;
+    const slotCount = is2PLocal() ? 2 : GAME.activePlayers;
     for (let pi = 0; pi < slotCount; pi++) {
       const slot = Physics.slotForPlayer(pi);
       const base = Physics.getBaseline(slot);
@@ -1116,6 +1135,7 @@ const Game = {
     this._lastScoreSignature = '';
     UI.applyLayoutForMode();
     this.updateAdjustSlider();
+    this.updateFriendAdjustSlider();
     this.updateWaitBar();
     this.lastTime = performance.now();
     if (this.loopId) cancelAnimationFrame(this.loopId);
@@ -1159,11 +1179,11 @@ const Game = {
 
       if (this.isResolving) {
         const elapsed = t - this.resolveStartTime;
-        if (Physics.almostStopped() && !Physics.anyBodyApproachingPocket()) {
+
+        /* If the striker is the only thing moving and it's basically dead,
+           end the turn right away (no waiting for full stop). */
+        if (Physics.strikerAlmostDead() && !Physics.anyBodyApproachingPocket()) {
           Physics.snapAll();
-        }
-        const fullyStopped = Physics.allStopped();
-        if (fullyStopped || elapsed > 12000) {
           this.isResolving = false;
           if (GAME.mode === 'playing' && GAME.isHost) {
             Network.broadcast({
@@ -1174,6 +1194,24 @@ const Game = {
             });
           }
           this.endTurn();
+        } else if (Physics.almostStopped() && !Physics.anyBodyApproachingPocket()) {
+          Physics.snapAll();
+        }
+
+        if (this.isResolving) {
+          const fullyStopped = Physics.allStopped();
+          if (fullyStopped || elapsed > 12000) {
+            this.isResolving = false;
+            if (GAME.mode === 'playing' && GAME.isHost) {
+              Network.broadcast({
+                type: 'sync_state',
+                state: Physics.snapshot(),
+                currentTurn: GAME.currentTurn,
+                players: GAME.players
+              });
+            }
+            this.endTurn();
+          }
         }
       }
 
@@ -1221,7 +1259,8 @@ const Game = {
       this.turnHadFoul = true;
       const idx = GAME.currentTurn;
       GAME.players[idx].score = Math.max(0, GAME.players[idx].score + STRIKER_FOUL);
-      FloatingText.spawn(pocket.x, pocket.y - 20, `${STRIKER_FOUL}`, '#dc2626');
+      /* Float the −20 in the shooter's orientation */
+      FloatingText.spawn(pocket.x, pocket.y - 20, `${STRIKER_FOUL}`, '#dc2626', idx);
       Toast.show(`Foul! Striker pocketed · ${STRIKER_FOUL} pts`, 'error', '⚠');
       this.updateScores();
       if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
@@ -1236,7 +1275,7 @@ const Game = {
     GAME.players[GAME.currentTurn].score += pts;
     this.turnPocketed++;
     this.updateScores();
-    FloatingText.spawn(pocket.x, pocket.y - 20, `+${pts}`, PLAYER_COLORS[GAME.currentTurn]);
+    FloatingText.spawn(pocket.x, pocket.y - 20, `+${pts}`, PLAYER_COLORS[GAME.currentTurn], GAME.currentTurn);
     if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
       Network.broadcast({
         type: 'score_update',
@@ -1277,6 +1316,7 @@ const Game = {
 
     this.updateTurnUI();
     this.updateAdjustSlider();
+    this.updateFriendAdjustSlider();
     this.updateWaitBar();
   },
 
@@ -1342,6 +1382,14 @@ const Game = {
     row.classList.toggle('active', p > 0.05);
   },
 
+  updateFriendPower(p) {
+    const fill = document.getElementById('friendPowerFill');
+    const row = document.getElementById('friendPowerRow');
+    if (!fill || !row) return;
+    fill.style.width = (p * 100) + '%';
+    row.classList.toggle('active', p > 0.05);
+  },
+
   updateTurnUI() {
     /* Online chips */
     document.querySelectorAll('.player-chip').forEach((c, i) => {
@@ -1349,66 +1397,49 @@ const Game = {
       c.classList.toggle('hidden-chip', i >= GAME.activePlayers);
     });
 
-    /* Local: friend chip (top) and P3 chip */
+    /* Local chips */
+    const youChip = document.getElementById('youChip');
+    const youChipName = document.getElementById('youChipName');
+    const youChipScore = document.getElementById('youChipScore');
+    const youChipDot = document.getElementById('youChipDot');
     const friendChip = document.getElementById('friendChip');
-    const friendChipDot = document.getElementById('friendChipDot');
     const friendChipName = document.getElementById('friendChipName');
     const friendChipScore = document.getElementById('friendChipScore');
-    const friendTurnRow = document.getElementById('friendTurnRow');
-    const friendTurnSwatch = document.getElementById('friendTurnSwatch');
-    const friendTurnLabel = document.getElementById('friendTurnLabel');
+    const friendChipDot = document.getElementById('friendChipDot');
 
-    if (GAME.mode === 'local' && GAME.localMode === 'local2p') {
-      /* P2 is at slot 2 (top), chip 3 is hidden, chip 2 not used */
-      if (friendChip) {
-        friendChip.classList.remove('hidden');
-        friendChip.classList.add('rotated-180');
-        friendChip.classList.toggle('active', GAME.currentTurn === 1);
+    if (isLocalMode()) {
+      if (youChip) {
+        youChip.classList.toggle('active', GAME.currentTurn === 0);
       }
-      if (friendChipDot) friendChipDot.style.background = PLAYER_COLORS[1];
-      if (friendChipName) friendChipName.textContent = 'P2';
-      if (friendChipScore) friendChipScore.textContent = GAME.players[1].score;
-      if (friendTurnRow) {
-        friendTurnRow.classList.remove('hidden');
-        friendTurnRow.classList.add('rotated-180');
-      }
-      if (friendTurnSwatch) friendTurnSwatch.style.background = PLAYER_COLORS[GAME.currentTurn];
-      if (friendTurnLabel) {
-        friendTurnLabel.textContent = (GAME.currentTurn === 1) ? "P2's turn" :
-          (GAME.currentTurn === 0 ? "Your turn (bottom)" : '');
-      }
-    } else if (GAME.mode === 'local' && GAME.localMode === 'practice3p') {
-      /* 3P local: use the friend chip for P3 (top). P2 chip stays in the online row on the left. */
-      if (friendChip) {
-        friendChip.classList.remove('hidden');
-        friendChip.classList.remove('rotated-180');
-      }
-      if (friendChipDot) friendChipDot.style.background = PLAYER_COLORS[2];
-      if (friendChipName) friendChipName.textContent = 'P3';
-      if (friendChipScore) friendChipScore.textContent = GAME.players[2].score;
-      if (friendTurnRow) friendTurnRow.classList.add('hidden');
-    } else {
-      if (friendChip) friendChip.classList.add('hidden');
-      if (friendTurnRow) friendTurnRow.classList.add('hidden');
-    }
+      if (youChipDot) youChipDot.style.background = PLAYER_COLORS[0];
+      if (youChipName) youChipName.textContent = 'YOU';
+      if (youChipScore) youChipScore.textContent = GAME.players[0].score;
 
-    /* Turn row (bottom, for "you") */
-    const swatch = document.getElementById('turnSwatch');
-    const label = document.getElementById('turnLabel');
-    swatch.style.background = PLAYER_COLORS[GAME.currentTurn];
-    const isLocal = isLocalMode();
-    if (isLocal) {
-      if (GAME.currentTurn === 0) label.textContent = 'Your turn';
-      else if (GAME.mode === 'local' && GAME.localMode === 'local2p') label.textContent = "P2's turn ↑";
-      else label.textContent = (GAME.currentTurn === 1 ? "P2's turn (left)" : "P3's turn ↑");
+      if (is2PLocal()) {
+        if (friendChip) {
+          friendChip.classList.remove('hidden');
+          friendChip.classList.toggle('active', GAME.currentTurn === 1);
+        }
+        if (friendChipDot) friendChipDot.style.background = PLAYER_COLORS[1];
+        if (friendChipName) friendChipName.textContent = 'P2';
+        if (friendChipScore) friendChipScore.textContent = GAME.players[1].score;
+      } else if (is3PLocal()) {
+        if (friendChip) {
+          friendChip.classList.remove('hidden');
+          friendChip.classList.remove('rotated-180');
+          friendChip.classList.toggle('active', GAME.currentTurn === 2);
+        }
+        if (friendChipDot) friendChipDot.style.background = PLAYER_COLORS[2];
+        if (friendChipName) friendChipName.textContent = 'P3';
+        if (friendChipScore) friendChipScore.textContent = GAME.players[2].score;
+      }
     } else {
-      if (GAME.currentTurn === GAME.myPlayerIndex) label.textContent = 'YOUR TURN';
-      else label.textContent = playerLabel(GAME.currentTurn) + "'S TURN";
+      if (youChip) youChip.classList.add('hidden');
     }
 
     document.getElementById('boardFrame').classList.toggle(
       'active',
-      isLocal || GAME.currentTurn === GAME.myPlayerIndex
+      isLocalMode() || GAME.currentTurn === GAME.myPlayerIndex
     );
   },
 
@@ -1419,7 +1450,11 @@ const Game = {
     const track = document.getElementById('adjustTrack');
     const isLocal = isLocalMode();
     const isMyTurn = isLocal || GAME.currentTurn === GAME.myPlayerIndex;
-    if (!isMyTurn || !Physics.striker || !Physics.striker.active || this.isResolving) {
+    /* In local 2P, "your" slider only makes sense when it's YOUR turn.
+       In local 3P, the slider always tracks the current local player. */
+    let visible = isMyTurn;
+    if (is2PLocal() && GAME.currentTurn !== 0) visible = false;
+    if (!visible || !Physics.striker || !Physics.striker.active || this.isResolving) {
       row.classList.add('hidden'); return;
     }
     row.classList.remove('hidden');
@@ -1463,6 +1498,53 @@ const Game = {
     }
   },
 
+  /* Friend's slider (top, rotated). Only shown in local 2P when it's P2's turn. */
+  updateFriendAdjustSlider() {
+    const row = document.getElementById('friendAdjustRow');
+    const thumb = document.getElementById('friendAdjustThumb');
+    const fill = document.getElementById('friendAdjustFill');
+    const track = document.getElementById('friendAdjustTrack');
+    if (!row || !track) return;
+
+    const show = is2PLocal() && GAME.currentTurn === 1 && Physics.striker && Physics.striker.active && !this.isResolving;
+    if (!show) { row.classList.add('hidden'); return; }
+    row.classList.remove('hidden');
+
+    const slot = Physics.slotForPlayer(1);
+    const base = Physics.getBaseline(slot);
+    let pct = 0.5;
+    if (base.axis === 'x') pct = (Physics.striker.x - base.min) / (base.max - base.min);
+    else pct = (Physics.striker.y - base.min) / (base.max - base.min);
+    pct = Math.max(0, Math.min(1, pct));
+    /* Because the row is rotated 180°, we mirror the thumb so P2's left/right
+       still matches the on-screen direction after they mentally flip. */
+    thumb.style.left = (pct * 100) + '%';
+    fill.style.width = (pct * 100) + '%';
+
+    if (!track.dataset.bound) {
+      track.dataset.bound = '1';
+      let dragging = false;
+      const updateFromClientX = (clientX) => {
+        if (!isAuthority() && GAME.currentTurn !== 0) {
+          /* P2's slider is only meaningful locally. In online play this row is hidden. */
+        }
+        const rect = track.getBoundingClientRect();
+        const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+        let rawPct = x / rect.width;
+        /* Because the row is rotated, invert the pct to keep P2's mental model consistent. */
+        rawPct = 1 - rawPct;
+        const free = Physics.findFreeBaselinePos(1, rawPct);
+        const s = Physics.striker; if (!s || !s.active) return;
+        s.x = free.x; s.y = free.y;
+        thumb.style.left = (free.pct * 100) + '%';
+        fill.style.width = (free.pct * 100) + '%';
+      };
+      track.addEventListener('pointerdown', e => { e.preventDefault(); AudioManager.init(); dragging = true; updateFromClientX(e.clientX); });
+      window.addEventListener('pointermove', e => { if (!dragging) return; e.preventDefault(); updateFromClientX(e.clientX); }, { passive: false });
+      window.addEventListener('pointerup', () => { dragging = false; });
+    }
+  },
+
   updateWaitBar() {
     const bar = document.getElementById('waitBar');
     const text = document.getElementById('waitBarText');
@@ -1475,7 +1557,6 @@ const Game = {
   },
 
   updateScores() {
-    const is2P = GAME.mode === 'local' && GAME.localMode === 'local2p';
     /* Online chips */
     GAME.players.forEach((p, i) => {
       const el = document.getElementById('scoreP' + i);
@@ -1489,18 +1570,20 @@ const Game = {
       if (nameEl) {
         if (idx === 0) nameEl.textContent = 'YOU';
         else if (idx === 1) nameEl.textContent = 'P2';
-        else if (idx === 2) nameEl.textContent = is2P ? 'P2' : 'P3';
+        else if (idx === 2) nameEl.textContent = is2PLocal() ? 'P2' : 'P3';
       }
       let visible = idx < GAME.activePlayers;
-      if (is2P) visible = false; /* hidden entirely in local 2P */
+      if (is2PLocal()) visible = false;
       chip.classList.toggle('hidden-chip', !visible);
     });
 
     /* Local chips */
+    const youChipScore = document.getElementById('youChipScore');
+    if (youChipScore) youChipScore.textContent = GAME.players[0].score;
     const friendChipScore = document.getElementById('friendChipScore');
     if (friendChipScore) {
-      if (is2P) friendChipScore.textContent = GAME.players[1].score;
-      else if (GAME.mode === 'local' && GAME.localMode === 'practice3p') friendChipScore.textContent = GAME.players[2].score;
+      if (is2PLocal()) friendChipScore.textContent = GAME.players[1].score;
+      else if (is3PLocal()) friendChipScore.textContent = GAME.players[2].score;
     }
   }
 };
@@ -1508,7 +1591,11 @@ const Game = {
 /* ───────── FLOATING POINTS TEXT ───────── */
 const FloatingText = {
   items: [],
-  spawn(x, y, text, color) { this.items.push({ x, y, text, color, life: 1, vy: -1.4 }); },
+  /* rotation: 0 or PI (per player) */
+  spawn(x, y, text, color, playerIndex = 0) {
+    const rot = (is2PLocal() && playerIndex === 1) ? Math.PI : 0;
+    this.items.push({ x, y, text, color, life: 1, vy: -1.4, rot });
+  },
   update(dt) {
     for (let i = this.items.length - 1; i >= 0; i--) {
       const it = this.items[i];
@@ -1523,14 +1610,16 @@ const FloatingText = {
     for (const it of this.items) {
       ctx.save();
       ctx.globalAlpha = Math.max(0, it.life);
+      ctx.translate(it.x, it.y);
+      if (it.rot) ctx.rotate(it.rot);
       ctx.font = '800 26px Outfit, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.lineWidth = 4;
       ctx.strokeStyle = '#ffffff';
-      ctx.strokeText(it.text, it.x, it.y);
+      ctx.strokeText(it.text, 0, 0);
       ctx.fillStyle = it.color;
-      ctx.fillText(it.text, it.x, it.y);
+      ctx.fillText(it.text, 0, 0);
       ctx.restore();
     }
   }
@@ -1550,45 +1639,42 @@ const UI = {
     document.getElementById('startGameBtn').addEventListener('click', () => this.startGame());
     document.getElementById('connectBtn').addEventListener('click', () => this.connect());
     document.getElementById('backBtn').addEventListener('click', () => this.quit());
-    document.getElementById('soundToggle').addEventListener('click', () => this.toggleSound());
+    document.getElementById('soundToggle').addEventListener('click', () => this.toggleSound('you'));
+    document.getElementById('friendSoundToggle').addEventListener('click', () => this.toggleSound('friend'));
     document.getElementById('playAgainBtn').addEventListener('click', () => this.playAgain(false));
     document.getElementById('goMenuBtn').addEventListener('click', () => this.goMenu());
     this.setupDigitInputs();
     this.setupChatDropdown();
   },
 
-  /* Show/hide top chips, chat button, legend depending on mode */
   applyLayoutForMode() {
     const playersRow = document.getElementById('playersRow');
     const chatToggle = document.getElementById('chatToggle');
     const gameTopbar = document.getElementById('gameTopbar');
-    const friendChip = document.getElementById('friendChip');
-    const friendTurnRow = document.getElementById('friendTurnRow');
-    const legendRow = document.querySelector('.legend-row');
+    const friendZone = document.getElementById('friendZone');
+    const youChip = document.getElementById('youChip');
+    const legendRow = document.getElementById('legendRow');
 
     if (isLocalMode()) {
       playersRow.classList.add('hidden-row');
       chatToggle.classList.add('hidden-toggle');
       gameTopbar.classList.add('compact');
-      if (GAME.mode === 'local' && GAME.localMode === 'local2p') {
-        friendChip.classList.remove('hidden');
-        friendChip.classList.add('rotated-180');
-        friendTurnRow.classList.remove('hidden');
-        friendTurnRow.classList.add('rotated-180');
-      } else if (GAME.mode === 'local' && GAME.localMode === 'practice3p') {
-        friendChip.classList.remove('hidden');
-        friendChip.classList.remove('rotated-180');
-        friendTurnRow.classList.add('hidden');
+      friendZone.classList.remove('hidden');
+      if (is2PLocal()) {
+        /* Rotate the whole friend zone so the friend reads it right-side up */
+        friendZone.classList.add('rotated-180');
+      } else {
+        friendZone.classList.remove('rotated-180');
       }
-      /* Hide legend in local modes to save space */
-      if (legendRow) legendRow.style.display = 'none';
+      if (legendRow) legendRow.classList.add('hidden-row');
     } else {
       playersRow.classList.remove('hidden-row');
       chatToggle.classList.remove('hidden-toggle');
       gameTopbar.classList.remove('compact');
-      friendChip.classList.add('hidden');
-      friendTurnRow.classList.add('hidden');
-      if (legendRow) legendRow.style.display = '';
+      friendZone.classList.add('hidden');
+      friendZone.classList.remove('rotated-180');
+      if (youChip) youChip.classList.add('hidden');
+      if (legendRow) legendRow.classList.remove('hidden-row');
     }
   },
 
@@ -1855,7 +1941,8 @@ const UI = {
         if (data.players) GAME.players = data.players;
         Physics.striker = Physics.createStriker(GAME.currentTurn, 0.5);
         Game.isResolving = false;
-        Game.updateScores(); Game.updateTurnUI(); Game.updateAdjustSlider(); Game.updateWaitBar();
+        Game.updateScores(); Game.updateTurnUI(); Game.updateAdjustSlider();
+        Game.updateFriendAdjustSlider(); Game.updateWaitBar();
         break;
 
       case 'score_update':
@@ -2014,10 +2101,16 @@ const UI = {
     );
   },
 
-  toggleSound() {
+  toggleSound(who) {
     GAME.audioEnabled = !GAME.audioEnabled;
-    document.getElementById('soundOnIcon').style.display = GAME.audioEnabled ? 'block' : 'none';
-    document.getElementById('soundOffIcon').style.display = GAME.audioEnabled ? 'none' : 'block';
+    const onYou = document.getElementById('soundOnIcon');
+    const offYou = document.getElementById('soundOffIcon');
+    const onFr = document.getElementById('friendSoundOnIcon');
+    const offFr = document.getElementById('friendSoundOffIcon');
+    if (onYou) onYou.style.display = GAME.audioEnabled ? 'block' : 'none';
+    if (offYou) offYou.style.display = GAME.audioEnabled ? 'none' : 'block';
+    if (onFr) onFr.style.display = GAME.audioEnabled ? 'block' : 'none';
+    if (offFr) offFr.style.display = GAME.audioEnabled ? 'none' : 'block';
     if (GAME.audioEnabled) AudioManager.play('click');
   },
 
@@ -2060,7 +2153,9 @@ const UI = {
     Game.isResolving = false;
     Game.ended = false;
     Game._ending = false;
-    Game.updateScores(); Game.updateTurnUI(); Game.updateAdjustSlider(); Game.updateWaitBar();
+    Game.updateScores(); Game.updateTurnUI();
+    Game.updateAdjustSlider(); Game.updateFriendAdjustSlider();
+    Game.updateWaitBar();
     if (!fromRemote && GAME.mode === 'playing') {
       if (GAME.isHost) Network.broadcast({ type: 'play_again' });
       else Network.broadcast({ type: 'request_play_again' });
