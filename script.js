@@ -1,28 +1,29 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3 PLAYER
-   • Original physics feel (MAX_POWER 16, friction 0.983,
-     bounce 0.74, restitution 0.90, mass ∝ radius)
-   • Score credited to the shooter of the turn (no double count)
-   • Client is a renderer — host is the physics authority
-   • Heartbeat ping/pong, late-join snapshot, chat echo
-   • 2P local: second player uses top baseline (teal)
+   CARROM 3P • v13
+   • Host-authoritative physics — no more score drift
+   • Clients forward input to host, host relays to others
+   • Chat, striker_move, shot all relay correctly (P2↔P3)
+   • Only host fires endTurn / endGame
+   • Striker foul counted once, on host only
+   • Slider still never lands the striker on a puck
+   • First to 100, second chance, aim from anywhere: kept
 ═══════════════════════════════════════════════════════════ */
 
 const WIN_SCORE = 100;
 const STRIKER_FOUL = -20;
 
 const GAME = {
-  mode: 'menu',
+  mode: 'menu',              // menu | host | join | local | practice | playing
   myPlayerIndex: 0,
   currentTurn: 0,
   isHost: false,
-  localMode: null,
+  localMode: null,           // null | 'practice3p' | 'local2p'
   isPractice: false,
   roomCode: null,
   players: [
-    { id: 'me', connected: true, ready: true, score: 0 },
-    { id: null, connected: false, ready: false, score: 0 },
-    { id: null, connected: false, ready: false, score: 0 }
+    { id: 'me', connected: true, score: 0 },
+    { id: null, connected: false, score: 0 },
+    { id: null, connected: false, score: 0 }
   ],
   activePlayers: 3,
   audioEnabled: true,
@@ -32,6 +33,13 @@ const GAME = {
 const PLAYER_COLORS = ['#e63946', '#2a9d8f', '#9c6ade'];
 const POINTS = { black: 10, white: 20 };
 const playerLabel = i => (i === GAME.myPlayerIndex) ? 'YOU' : 'P' + (i + 1);
+
+/* Is this device the authority for physics / scoring? */
+function isAuthority() {
+  if (GAME.mode === 'local' || GAME.mode === 'practice') return true;
+  if (GAME.mode === 'playing' && GAME.isHost) return true;
+  return false;
+}
 
 /* ───────── AUDIO ───────── */
 const AudioManager = {
@@ -60,7 +68,7 @@ const AudioManager = {
     if (ctx.createStereoPanner) {
       const p = ctx.createStereoPanner();
       p.pan.value = pan;
-      g.connect(p); p.connect(this._master || ctx.destination);
+      g.connect(p); g.connect(this._master || ctx.destination);
     } else g.connect(this._master || ctx.destination);
     return g;
   },
@@ -161,16 +169,15 @@ const AudioManager = {
 const Network = {
   peer: null, connections: [], isHost: false, roomCode: null,
   onData: null, onError: null, onPeerJoin: null, onPeerLeave: null,
-  _pingTimer: null, _lastPingReceived: 0,
 
   generateCode() { return String(Math.floor(1000 + Math.random() * 9000)); },
-  generateClientId() { return 'carrom-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
+  generateClientId() { return 'c13-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
 
   initHost(cb) {
     this.isHost = true;
     this.roomCode = this.generateCode();
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const peerId = 'carrom3p-' + this.roomCode;
+    const peerId = 'c13-' + this.roomCode;
     return new Promise((resolve, reject) => {
       let settled = false, attempts = 0;
       const maxAttempts = 6;
@@ -217,7 +224,7 @@ const Network = {
     this.isHost = false;
     this.roomCode = roomCode;
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const hostPeerId = 'carrom3p-' + roomCode;
+    const hostPeerId = 'c13-' + roomCode;
     const clientId = this.generateClientId();
     return new Promise((resolve, reject) => {
       let settled = false, retries = 0;
@@ -252,7 +259,6 @@ const Network = {
               });
               conn.on('error', e => console.error('conn error:', e));
               setTimeout(() => { try { conn.send({ type: 'hello' }); } catch (e) {} }, 100);
-              this._startPingTimer();
               AudioManager.play('connect'); resolve(conn);
             });
             conn.on('error', err => {
@@ -290,18 +296,6 @@ const Network = {
     });
   },
 
-  _startPingTimer() {
-    if (this._pingTimer) return;
-    this._pingTimer = setInterval(() => {
-      if (!this.connections.length) return;
-      this.broadcast({ type: 'ping', t: Date.now() });
-      if (!this.isHost && this._lastPingReceived > 0) {
-        const gap = Date.now() - this._lastPingReceived;
-        if (gap > 8000 && this.onError) this.onError(new Error('heartbeat-lost'));
-      }
-    }, 3000);
-  },
-
   setupConnection(conn) {
     conn.on('open', () => {
       if (!this.connections.includes(conn)) this.connections.push(conn);
@@ -316,38 +310,36 @@ const Network = {
     conn.on('error', e => console.error('host conn error:', e));
   },
 
-  resyncConnections() {
-    this.connections = this.connections.filter(c => c && c.open);
-  },
-  broadcast(data) {
-    this.resyncConnections();
+  /* Send to all. On client, this only reaches the host. */
+  broadcast(data) { this.connections.forEach(c => { if (c.open) { try { c.send(data); } catch (e) {} } }); },
+
+  /* Send to all EXCEPT a specific connection. Host uses this to relay. */
+  broadcastExcept(data, excludeConn) {
     this.connections.forEach(c => {
-      if (c.open) { try { c.send(data); } catch (e) { console.warn('send failed', e); } }
+      if (c === excludeConn) return;
+      if (c.open) { try { c.send(data); } catch (e) {} }
     });
   },
+
   sendTo(conn, data) { if (conn && conn.open) { try { conn.send(data); } catch (e) {} } },
-  disconnect() {
-    if (this._pingTimer) { clearInterval(this._pingTimer); this._pingTimer = null; }
-    if (this.peer) { try { this.peer.destroy(); } catch (e) {} this.peer = null; }
-    this.connections = [];
-  }
+  disconnect() { if (this.peer) { try { this.peer.destroy(); } catch (e) {} this.peer = null; } this.connections = []; }
 };
 
-/* ───────── PHYSICS — original feel ───────── */
+/* ───────── PHYSICS ───────── */
 const Physics = {
   W: 700, H: 700,
   BOARD_PADDING: 62,
   PUCK_RADIUS: 17,
   STRIKER_RADIUS: 24,
   POCKET_RADIUS: 46,
-  FRICTION: 0.983,
-  WALL_BOUNCE: 0.74,
-  MIN_SPEED: 0.06,
-  MAX_POWER: 16,
-  RESTITUTION: 0.90,
+  FRICTION: 0.990,
+  WALL_BOUNCE: 0.8,
+  MIN_SPEED: 0.05,
+  ALMOST_STOP_SPEED: 0.35,
+  MAX_POWER: 26,
+  RESTITUTION: 0.94,
 
   pockets: [], pucks: [], striker: null,
-  _pocketEvents: [],
 
   init() {
     const b = this.bounds();
@@ -357,7 +349,6 @@ const Physics = {
       { x: b.left,  y: b.bottom },
       { x: b.right, y: b.bottom }
     ];
-    this._pocketEvents = [];
   },
 
   bounds() {
@@ -398,9 +389,8 @@ const Physics = {
       pucks.push({
         x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r,
         vx: 0, vy: 0, radius: this.PUCK_RADIUS,
-        color: '#f5ede0', rim: '#d4c4a8',
-        type: 'white', points: POINTS.white,
-        active: true, pocketed: false, trail: []
+        color: '#ffffff', rim: '#c9c9c9', cap: '#f3f3f3', innerDot: '#bdbdbd',
+        type: 'white', points: POINTS.white, active: true, pocketed: false, trail: []
       });
     }
     for (let i = 0; i < 9; i++) {
@@ -409,16 +399,14 @@ const Physics = {
       pucks.push({
         x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r,
         vx: 0, vy: 0, radius: this.PUCK_RADIUS,
-        color: '#1a1a1a', rim: '#000000',
-        type: 'black', points: POINTS.black,
-        active: true, pocketed: false, trail: []
+        color: '#1a1a1a', rim: '#000', cap: '#3a3a3a', innerDot: '#cfcfcf',
+        type: 'black', points: POINTS.black, active: true, pocketed: false, trail: []
       });
     }
     pucks.push({
       x: cx, y: cy, vx: 0, vy: 0, radius: this.PUCK_RADIUS,
-      color: '#f5ede0', rim: '#d4c4a8',
-      type: 'white', points: POINTS.white,
-      active: true, pocketed: false, trail: []
+      color: '#ffffff', rim: '#c9c9c9', cap: '#f3f3f3', innerDot: '#bdbdbd',
+      type: 'white', points: POINTS.white, active: true, pocketed: false, trail: []
     });
     return pucks;
   },
@@ -514,7 +502,6 @@ const Physics = {
     };
   },
 
-  /* Mass ∝ radius (original), impulse clamp ±14 (original) */
   resolveCollision(a, b, onHit) {
     const dx = b.x - a.x, dy = b.y - a.y;
     const d2 = dx * dx + dy * dy;
@@ -528,15 +515,14 @@ const Physics = {
     const dvx = b.vx - a.vx, dvy = b.vy - a.vy;
     const vn = dvx * nx + dvy * ny;
     if (vn > 0) return;
-    const invA = 1 / a.radius;
-    const invB = 1 / b.radius;
+    const invA = 1 / a.radius, invB = 1 / b.radius;
     const j = -(1 + this.RESTITUTION) * vn / (invA + invB);
-    const clampedJ = Math.max(-14, Math.min(14, j));
+    const clampedJ = Math.max(-24, Math.min(24, j));
     const ix = clampedJ * nx, iy = clampedJ * ny;
     a.vx -= ix * invA; a.vy -= iy * invA;
     b.vx += ix * invB; b.vy += iy * invB;
-    if (Math.abs(vn) > 0.6 && onHit) {
-      onHit(Math.min(Math.abs(vn) / 14, 1), (a.x + b.x) / 2, (a.y + b.y) / 2);
+    if (Math.abs(vn) > 0.4 && onHit) {
+      onHit(Math.min(Math.abs(vn) / 18, 1), (a.x + b.x) / 2, (a.y + b.y) / 2);
     }
   },
 
@@ -546,14 +532,14 @@ const Physics = {
       const pre = Math.hypot(this.striker.vx, this.striker.vy);
       this.stepBody(this.striker, b, onWall);
       this.checkPockets(this.striker, onPocket, true);
-      if (pre > 3 && onStrikerRoll) onStrikerRoll(this.striker);
+      if (pre > 2.4 && onStrikerRoll) onStrikerRoll(this.striker);
     }
     for (const puck of this.pucks) {
       if (!puck.active) continue;
       this.stepBody(puck, b, onWall);
       this.checkPockets(puck, onPocket, false);
     }
-    for (let iter = 0; iter < 2; iter++) {
+    for (let iter = 0; iter < 3; iter++) {
       for (let i = 0; i < this.pucks.length; i++) {
         if (!this.pucks[i].active) continue;
         for (let j = i + 1; j < this.pucks.length; j++) {
@@ -584,7 +570,7 @@ const Physics = {
     body.vx *= this.FRICTION; body.vy *= this.FRICTION;
     const speed = Math.hypot(body.vx, body.vy);
     if (speed < this.MIN_SPEED) { body.vx = 0; body.vy = 0; }
-    if (speed > 3) { body.trail.push({ x: body.x, y: body.y }); if (body.trail.length > 8) body.trail.shift(); }
+    if (speed > 2.5) { body.trail.push({ x: body.x, y: body.y }); if (body.trail.length > 8) body.trail.shift(); }
     else if (body.trail.length > 0) body.trail.shift();
 
     const skipWall = this.nearPocket(body);
@@ -605,17 +591,16 @@ const Physics = {
     if (hitWall && onWall) onWall(body, wallSpeed);
   },
 
-  /* Pocket detection — original threshold */
   checkPockets(body, onPocket, isStriker) {
     if (body.pocketed || !body.active) return false;
     for (const p of this.pockets) {
       const dx = body.x - p.x, dy = body.y - p.y;
-      const threshold = this.POCKET_RADIUS - body.radius * 0.4;
-      if (dx * dx + dy * dy < threshold * threshold) {
+      const d2 = dx * dx + dy * dy;
+      const hit = this.POCKET_RADIUS - 2;
+      if (d2 < hit * hit) {
         body.active = false;
         body.pocketed = true;
         body.vx = 0; body.vy = 0;
-        this._pocketEvents.push({ body, pocket: p, isStriker });
         if (onPocket) onPocket(body, p, isStriker);
         return true;
       }
@@ -623,36 +608,38 @@ const Physics = {
     return false;
   },
 
-  drainPocketEvents() {
-    const ev = this._pocketEvents;
-    this._pocketEvents = [];
-    return ev;
+  anyBodyApproachingPocket() {
+    const R = this.POCKET_RADIUS * 1.6;
+    const check = (body) => {
+      if (!body || !body.active) return false;
+      for (const p of this.pockets) {
+        const dx = body.x - p.x, dy = body.y - p.y;
+        if (dx * dx + dy * dy < R * R) return true;
+      }
+      return false;
+    };
+    if (check(this.striker)) return true;
+    for (const p of this.pucks) if (check(p)) return true;
+    return false;
   },
 
   allStopped() {
-    const th = 0.01;
+    const th = 0.02;
     if (this.striker && this.striker.active && Math.hypot(this.striker.vx, this.striker.vy) > th) return false;
     for (const p of this.pucks) if (p.active && Math.hypot(p.vx, p.vy) > th) return false;
     return true;
   },
 
-  forcePocketIfTouching() {
-    const R = this.POCKET_RADIUS * 0.9;
-    const tryBody = (body, isStriker) => {
-      if (!body || !body.active || body.pocketed) return;
-      for (const p of this.pockets) {
-        const dx = body.x - p.x, dy = body.y - p.y;
-        if (dx * dx + dy * dy < R * R) {
-          body.active = false;
-          body.pocketed = true;
-          body.vx = 0; body.vy = 0;
-          this._pocketEvents.push({ body, pocket: p, isStriker });
-          return;
-        }
-      }
-    };
-    tryBody(this.striker, true);
-    for (const p of this.pucks) tryBody(p, false);
+  almostStopped() {
+    const th = this.ALMOST_STOP_SPEED;
+    if (this.striker && this.striker.active && Math.hypot(this.striker.vx, this.striker.vy) > th) return false;
+    for (const p of this.pucks) if (p.active && Math.hypot(p.vx, p.vy) > th) return false;
+    return true;
+  },
+
+  snapAll() {
+    if (this.striker && this.striker.active) { this.striker.vx = 0; this.striker.vy = 0; }
+    for (const p of this.pucks) if (p.active) { p.vx = 0; p.vy = 0; }
   },
 
   activePucksCount() { return this.pucks.filter(p => p.active).length; },
@@ -679,7 +666,7 @@ const Physics = {
   }
 };
 
-/* ───────── RENDERER — original warm-carrom look ───────── */
+/* ───────── RENDERER ───────── */
 const Renderer = {
   canvas: null, ctx: null, W: 700, H: 700, time: 0, pocketPops: [],
 
@@ -855,32 +842,34 @@ const Renderer = {
       const r = puck.radius;
 
       ctx.beginPath();
-      ctx.arc(puck.x, puck.y + 2, r, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ctx.ellipse(puck.x, puck.y + r * 0.55, r * 0.95, r * 0.35, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(80, 55, 20, 0.18)';
       ctx.fill();
 
       ctx.beginPath(); ctx.arc(puck.x, puck.y, r, 0, Math.PI * 2);
       ctx.fillStyle = puck.color; ctx.fill();
+      ctx.beginPath(); ctx.arc(puck.x, puck.y, r - 0.4, 0, Math.PI * 2);
+      ctx.strokeStyle = puck.rim; ctx.lineWidth = 1.4; ctx.stroke();
 
-      ctx.beginPath(); ctx.arc(puck.x, puck.y, r, 0, Math.PI * 2);
-      ctx.strokeStyle = puck.rim; ctx.lineWidth = 1.6; ctx.stroke();
+      ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.66, 0, Math.PI * 2);
+      ctx.strokeStyle = puck.type === 'white' ? '#c0c0c0' : '#3a3a3a';
+      ctx.lineWidth = 1.2; ctx.stroke();
 
-      ctx.beginPath();
-      ctx.arc(puck.x - r * 0.35, puck.y - r * 0.35, r * 0.55, 0, Math.PI * 2);
-      ctx.fillStyle = puck.type === 'white'
-        ? 'rgba(255,255,255,0.55)'
-        : 'rgba(255,255,255,0.06)';
-      ctx.fill();
-
-      ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.5, 0, Math.PI * 2);
-      ctx.strokeStyle = puck.type === 'white'
-        ? 'rgba(180, 150, 100, 0.35)'
-        : 'rgba(255,255,255,0.08)';
-      ctx.lineWidth = 1; ctx.stroke();
+      ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.42, 0, Math.PI * 2);
+      ctx.fillStyle = puck.cap; ctx.fill();
+      ctx.beginPath(); ctx.arc(puck.x, puck.y, r * 0.42, 0, Math.PI * 2);
+      ctx.strokeStyle = puck.type === 'white' ? '#b8b8b8' : '#1a1a1a';
+      ctx.lineWidth = 0.9; ctx.stroke();
 
       ctx.beginPath(); ctx.arc(puck.x, puck.y, 2, 0, Math.PI * 2);
-      ctx.fillStyle = puck.type === 'white' ? '#d4c4a8' : '#3a3a3a';
-      ctx.fill();
+      ctx.fillStyle = puck.innerDot; ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(puck.x, puck.y, r * 0.85, Math.PI * 1.15, Math.PI * 1.55);
+      ctx.strokeStyle = puck.type === 'white'
+        ? 'rgba(255,255,255,0.95)'
+        : 'rgba(255,255,255,0.22)';
+      ctx.lineWidth = 1.6; ctx.stroke();
     }
   },
 
@@ -896,35 +885,38 @@ const Renderer = {
     if (!isMoving && isMyTurn && GAME.mode !== 'menu') {
       const pulse = 0.5 + Math.sin(this.time * 4) * 0.5;
       ctx.beginPath();
-      ctx.arc(s.x, s.y, r + 10, 0, Math.PI * 2);
-      const grd = ctx.createRadialGradient(s.x, s.y, r, s.x, s.y, r + 10);
-      grd.addColorStop(0, s.color + '00');
-      grd.addColorStop(0.5, s.color + Math.floor((0.3 + pulse * 0.3) * 255).toString(16).padStart(2, '0'));
-      grd.addColorStop(1, s.color + '00');
-      ctx.fillStyle = grd; ctx.fill();
+      ctx.arc(s.x, s.y, r + 6 + pulse * 2, 0, Math.PI * 2);
+      ctx.strokeStyle = s.color;
+      ctx.globalAlpha = 0.35 + pulse * 0.25;
+      ctx.lineWidth = 2; ctx.stroke();
+      ctx.globalAlpha = 1;
     }
 
-    ctx.beginPath(); ctx.arc(s.x, s.y + 3, r, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(s.x, s.y + r * 0.55, r * 0.95, r * 0.35, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(80, 55, 20, 0.25)';
+    ctx.fill();
 
     ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
     ctx.fillStyle = s.color; ctx.fill();
+    ctx.beginPath(); ctx.arc(s.x, s.y, r - 0.6, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1.5; ctx.stroke();
 
-    ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-    ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.72, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 1.4; ctx.stroke();
+
+    ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff'; ctx.fill();
+    ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.5, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 1; ctx.stroke();
+
+    ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.22, 0, Math.PI * 2);
+    ctx.fillStyle = s.color; ctx.fill();
 
     ctx.beginPath();
-    ctx.arc(s.x - r * 0.35, s.y - r * 0.35, r * 0.55, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.fill();
-
-    ctx.beginPath(); ctx.arc(s.x, s.y, r * 0.62, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.arc(s.x, s.y, r * 0.85, Math.PI * 1.15, Math.PI * 1.55);
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
     ctx.lineWidth = 2; ctx.stroke();
-
-    ctx.beginPath(); ctx.arc(s.x, s.y, 3.5, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fill();
   },
 
   drawPocketPops() {
@@ -953,16 +945,16 @@ const Renderer = {
     if (!start || !current) return;
     const dx = current.x - start.x, dy = current.y - start.y;
     const dist = Math.hypot(dx, dy);
-    if (dist < 14) return;
-    const power = Math.min(dist / 120, 1);
+    if (dist < 12) return;
+    const power = Math.min(dist / 130, 1);
     const angle = Math.atan2(-dy, -dx);
-    const lineLen = 100 + power * 220;
+    const lineLen = 90 + power * 240;
     const endX = s.x + Math.cos(angle) * lineLen;
     const endY = s.y + Math.sin(angle) * lineLen;
 
     ctx.save();
     ctx.setLineDash([8, 10]);
-    ctx.lineDashOffset = -this.time * 40;
+    ctx.lineDashOffset = -this.time * 38;
     ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(endX, endY);
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 6; ctx.lineCap = 'round';
@@ -974,19 +966,19 @@ const Renderer = {
     ctx.globalAlpha = 1;
     ctx.restore();
 
-    const endRadius = 5 + power * 10;
+    const endRadius = 5 + power * 9;
     ctx.beginPath(); ctx.arc(endX, endY, endRadius, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(217,154,16,0.25)'; ctx.fill();
     ctx.strokeStyle = '#d99a10'; ctx.lineWidth = 2; ctx.stroke();
 
-    const aLen = 11;
+    const aLen = 10;
     ctx.save(); ctx.translate(endX, endY); ctx.rotate(angle);
     ctx.beginPath(); ctx.moveTo(0, 0);
     ctx.lineTo(-aLen, -aLen * 0.55); ctx.lineTo(-aLen, aLen * 0.55); ctx.closePath();
     ctx.fillStyle = '#d99a10'; ctx.fill();
     ctx.restore();
 
-    ctx.beginPath(); ctx.arc(s.x, s.y, s.radius + 6 + power * 8, 0, Math.PI * 2);
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.radius + 6 + power * 7, 0, Math.PI * 2);
     ctx.strokeStyle = '#d99a10'; ctx.globalAlpha = 0.6; ctx.lineWidth = 2; ctx.stroke();
     ctx.globalAlpha = 1;
   }
@@ -1051,7 +1043,7 @@ const Input = {
     const pos = this.coords(e);
     this.aimCurrent = { x: pos.x, y: pos.y };
     const dx = pos.x - this.aimStart.x, dy = pos.y - this.aimStart.y;
-    Game.updatePower(Math.min(Math.hypot(dx, dy) / 120, 1));
+    Game.updatePower(Math.min(Math.hypot(dx, dy) / 130, 1));
   },
 
   onUp(e) {
@@ -1069,23 +1061,38 @@ const Input = {
     if (!s || !s.active) return;
     const dx = cur.x - start.x, dy = cur.y - start.y;
     const dist = Math.hypot(dx, dy);
-    if (dist < 18) { AudioManager.play('release'); return; }
-    const power = Math.min(dist / 120, 1) * Physics.MAX_POWER;
+    if (dist < 12) { AudioManager.play('release'); return; }
+    const power = Math.min(dist / 130, 1) * Physics.MAX_POWER;
     const angle = Math.atan2(-dy, -dx);
-    s.vx = Math.cos(angle) * power;
-    s.vy = Math.sin(angle) * power;
-    AudioManager.play('shoot');
-    Game.currentTurnAtShot = GAME.currentTurn;
-    Game.turnHadFoul = false;
-    Game.turnPocketed = 0;
-    if (GAME.mode === 'playing' && !GAME.isPractice) {
+    const vx = Math.cos(angle) * power;
+    const vy = Math.sin(angle) * power;
+
+    if (GAME.mode === 'playing' && !GAME.isPractice && !GAME.isHost) {
+      /* Client: apply a local prediction (visual only), then tell the host */
+      s.vx = vx; s.vy = vy;
       Network.broadcast({
         type: 'shot', player: GAME.myPlayerIndex,
-        vx: s.vx, vy: s.vy, x: s.x, y: s.y
+        vx, vy, x: s.x, y: s.y
+      });
+      Game.isResolving = true;
+      Game.resolveStartTime = performance.now();
+      AudioManager.play('shoot');
+      return;
+    }
+
+    /* Host or local: apply directly */
+    s.vx = vx; s.vy = vy;
+    AudioManager.play('shoot');
+    if (GAME.mode === 'playing' && !GAME.isPractice && GAME.isHost) {
+      Network.broadcast({
+        type: 'shot', player: GAME.myPlayerIndex,
+        vx, vy, x: s.x, y: s.y
       });
     }
     Game.isResolving = true;
     Game.resolveStartTime = performance.now();
+    Game.turnHadFoul = false;
+    Game.turnPocketed = 0;
   },
 
   onCancel() {
@@ -1103,8 +1110,8 @@ const Input = {
 const Game = {
   isResolving: false, resolveStartTime: 0, loopId: null, lastTime: 0,
   turnHadFoul: false, turnPocketed: 0, ended: false,
-  currentTurnAtShot: 0,
   _lastNetTick: 0, _lastRollSound: 0, _ending: false,
+  _lastScoreSignature: '',
 
   start() {
     Renderer.init();
@@ -1117,7 +1124,7 @@ const Game = {
     this.turnPocketed = 0;
     this.ended = false;
     this._ending = false;
-    this.currentTurnAtShot = GAME.currentTurn;
+    this._lastScoreSignature = '';
     this.updateAdjustSlider();
     this.updateWaitBar();
     this.lastTime = performance.now();
@@ -1125,20 +1132,13 @@ const Game = {
     this.loop(this.lastTime);
   },
 
-  isAuthority() {
-    if (GAME.mode === 'local' || GAME.isPractice) return true;
-    if (GAME.mode === 'playing') return GAME.isHost;
-    return false;
-  },
-
   loop(t) {
     const dt = Math.min((t - this.lastTime) / 1000, 0.05);
     this.lastTime = t;
     Renderer.time += dt;
 
-    const authority = this.isAuthority();
-
-    if (authority) {
+    /* Only the authority runs physics on shared state. Clients just render. */
+    if (isAuthority()) {
       Physics.step(
         (intensity, x, y) => {
           const pan = (x / Physics.W) * 2 - 1;
@@ -1149,17 +1149,17 @@ const Game = {
           else if (intensity > 0.35) AudioManager.play('puck_hit_med', { pan, volume: Math.min(intensity + 0.15, 0.9) });
           else AudioManager.play('puck_hit_soft', { pan, volume: Math.min(intensity + 0.3, 0.8) });
         },
-        () => {},
+        (body, pocket, isStriker) => this.handlePocket(body, pocket, isStriker),
         (body, wallSpeed) => {
           const pan = (body.x / Physics.W) * 2 - 1;
           const v = Math.min(wallSpeed / 14, 1);
-          if (v < 0.1) return;
+          if (v < 0.15) return;
           if (v > 0.5) AudioManager.play('wall_thud', { pan, volume: v });
           else AudioManager.play('wall_tick', { pan, volume: 0.4 + v * 0.4 });
         },
         (striker) => {
           const now = performance.now();
-          if (now - this._lastRollSound > 90) {
+          if (now - this._lastRollSound > 80) {
             this._lastRollSound = now;
             const pan = (striker.x / Physics.W) * 2 - 1;
             const spd = Math.hypot(striker.vx, striker.vy);
@@ -1167,47 +1167,54 @@ const Game = {
           }
         }
       );
-      this.drainPockets();
-    }
 
-    if (this.isResolving && authority) {
-      const elapsed = t - this.resolveStartTime;
-      const fullyStopped = Physics.allStopped();
-      if (fullyStopped || elapsed > 8000) {
-        Physics.forcePocketIfTouching();
-        this.drainPockets();
-        this.isResolving = false;
-        if (GAME.mode === 'playing' && GAME.isHost) {
-          Network.broadcast({
-            type: 'sync_state',
-            state: Physics.snapshot(),
-            currentTurn: GAME.currentTurn,
-            players: GAME.players
-          });
+      if (this.isResolving) {
+        const elapsed = t - this.resolveStartTime;
+        if (Physics.almostStopped() && !Physics.anyBodyApproachingPocket()) {
+          Physics.snapAll();
         }
-        this.endTurn();
-      }
-    }
-
-    if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
-      const moving = !Physics.allStopped();
-      if (moving || this.isResolving) {
-        const now = performance.now();
-        if (now - this._lastNetTick > 50) {
-          this._lastNetTick = now;
-          Network.broadcast({ type: 'sync_state', state: Physics.snapshot() });
+        const fullyStopped = Physics.allStopped();
+        if (fullyStopped || elapsed > 12000) {
+          this.isResolving = false;
+          if (GAME.mode === 'playing' && GAME.isHost) {
+            Network.broadcast({
+              type: 'sync_state',
+              state: Physics.snapshot(),
+              currentTurn: GAME.currentTurn,
+              players: GAME.players
+            });
+          }
+          this.endTurn();
         }
       }
-    }
 
-    if (!this.ended && authority) {
-      const winner = this.checkWinner();
-      if (winner !== -1) {
-        this.ended = true;
-        this.endGame(winner);
-      } else if (Physics.activePucksCount() === 0 && !this.isResolving && Physics.allStopped()) {
-        this.ended = true;
-        this.endGame(-1);
+      if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
+        const moving = !Physics.allStopped();
+        if (moving || this.isResolving) {
+          const now = performance.now();
+          if (now - this._lastNetTick > 50) {
+            this._lastNetTick = now;
+            Network.broadcast({ type: 'sync_state', state: Physics.snapshot() });
+          }
+        }
+      }
+
+      if (!this.ended) {
+        const winner = this.checkWinner();
+        if (winner !== -1) {
+          this.ended = true;
+          this.endGame(winner);
+        } else if (Physics.activePucksCount() === 0 && !this.isResolving) {
+          this.ended = true;
+          this.endGame(-1);
+        }
+      }
+    } else {
+      /* Client: just advance visual physics for smooth motion between snapshots */
+      if (this.isResolving) {
+        const elapsed = t - this.resolveStartTime;
+        /* Timeout safety — host should have told us by now */
+        if (elapsed > 12500) this.isResolving = false;
       }
     }
 
@@ -1217,36 +1224,40 @@ const Game = {
     this.loopId = requestAnimationFrame(this.loop.bind(this));
   },
 
-  drainPockets() {
-    const events = Physics.drainPocketEvents();
-    if (!events.length) return;
-    const shooter = this.currentTurnAtShot;
-    for (const ev of events) {
-      const { body, pocket, isStriker } = ev;
-      const pan = (body.x / Physics.W) * 2 - 1;
-      Renderer.addPocketPop(pocket.x, pocket.y, body.color);
+  handlePocket(body, pocket, isStriker) {
+    /* Only the authority scores. Clients never call this because they don't step physics. */
+    if (!isAuthority()) return;
 
-      if (isStriker) {
-        AudioManager.play('striker_pocket', { pan });
-        this.turnHadFoul = true;
-        GAME.players[shooter].score = Math.max(0, GAME.players[shooter].score + STRIKER_FOUL);
-        FloatingText.spawn(pocket.x, pocket.y - 20, `${STRIKER_FOUL}`, '#dc2626');
-        Toast.show(`Foul! Striker pocketed · ${STRIKER_FOUL} pts`, 'error', '⚠');
-        this.updateScores();
-        if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
-          Network.broadcast({ type: 'score_update', playerIndex: shooter, score: GAME.players[shooter].score });
-        }
-      } else {
-        AudioManager.play('puck_pocket', { pan });
-        const pts = body.points || 0;
-        GAME.players[shooter].score += pts;
-        this.turnPocketed++;
-        this.updateScores();
-        FloatingText.spawn(pocket.x, pocket.y - 20, `+${pts}`, PLAYER_COLORS[shooter]);
-        if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
-          Network.broadcast({ type: 'score_update', playerIndex: shooter, score: GAME.players[shooter].score });
-        }
+    const pan = (body.x / Physics.W) * 2 - 1;
+    Renderer.addPocketPop(pocket.x, pocket.y, body.color);
+
+    if (isStriker) {
+      AudioManager.play('striker_pocket', { pan });
+      this.turnHadFoul = true;
+      const idx = GAME.currentTurn;
+      GAME.players[idx].score = Math.max(0, GAME.players[idx].score + STRIKER_FOUL);
+      FloatingText.spawn(pocket.x, pocket.y - 20, `${STRIKER_FOUL}`, '#dc2626');
+      Toast.show(`Foul! Striker pocketed · ${STRIKER_FOUL} pts`, 'error', '⚠');
+      this.updateScores();
+      if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
+        Network.broadcast({ type: 'score_update', playerIndex: idx, score: GAME.players[idx].score });
+        Network.broadcast({ type: 'foul_striker', playerIndex: idx, score: GAME.players[idx].score });
       }
+      return;
+    }
+
+    AudioManager.play('puck_pocket', { pan });
+    const pts = body.points || 0;
+    GAME.players[GAME.currentTurn].score += pts;
+    this.turnPocketed++;
+    this.updateScores();
+    FloatingText.spawn(pocket.x, pocket.y - 20, `+${pts}`, PLAYER_COLORS[GAME.currentTurn]);
+    if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
+      Network.broadcast({
+        type: 'score_update',
+        playerIndex: GAME.currentTurn,
+        score: GAME.players[GAME.currentTurn].score
+      });
     }
   },
 
@@ -1258,24 +1269,21 @@ const Game = {
   },
 
   endTurn() {
+    if (!isAuthority()) return;
     const foul = this.turnHadFoul;
     const scored = this.turnPocketed > 0;
 
-    if (foul) {
-      AudioManager.play('turn_pass');
-    } else if (scored) {
+    if (foul) AudioManager.play('turn_pass');
+    else if (scored) {
       Toast.show('Nice! Play again', 'success', '✦');
       AudioManager.play('second_chance');
-    } else {
-      AudioManager.play('turn');
-    }
+    } else AudioManager.play('turn');
 
     const keepTurn = !foul && scored;
     this.turnHadFoul = false;
     this.turnPocketed = 0;
 
     if (!keepTurn) GAME.currentTurn = (GAME.currentTurn + 1) % GAME.activePlayers;
-    this.currentTurnAtShot = GAME.currentTurn;
     Physics.striker = Physics.createStriker(GAME.currentTurn, 0.5);
 
     if (GAME.mode === 'playing' && !GAME.isPractice && GAME.isHost) {
@@ -1288,6 +1296,7 @@ const Game = {
   },
 
   endGame(winnerIdx) {
+    if (!isAuthority()) return;
     if (this._ending) return;
     this._ending = true;
     AudioManager.play('win');
@@ -1586,9 +1595,9 @@ const UI = {
     GAME.mode = 'host'; GAME.isHost = true; GAME.isPractice = false; GAME.myPlayerIndex = 0;
     GAME.localMode = null; GAME.activePlayers = 3;
     GAME.players = [
-      { id: 'me', connected: true, ready: true, score: 0 },
-      { id: null, connected: false, ready: false, score: 0 },
-      { id: null, connected: false, ready: false, score: 0 }
+      { id: 'me', connected: true, score: 0 },
+      { id: null, connected: false, score: 0 },
+      { id: null, connected: false, score: 0 }
     ];
     document.getElementById('createModal').classList.remove('hidden');
     document.getElementById('roomCodeDisplay').textContent = '----';
@@ -1630,9 +1639,9 @@ const UI = {
     GAME.myPlayerIndex = 0; GAME.currentTurn = 0;
     GAME.activePlayers = 3;
     GAME.players = [
-      { id: 'me', connected: true, ready: true, score: 0 },
-      { id: 'p2', connected: true, ready: true, score: 0 },
-      { id: 'p3', connected: true, ready: true, score: 0 }
+      { id: 'me', connected: true, score: 0 },
+      { id: 'p2', connected: true, score: 0 },
+      { id: 'p3', connected: true, score: 0 }
     ];
     this.enterGame();
   },
@@ -1644,9 +1653,9 @@ const UI = {
     GAME.myPlayerIndex = 0; GAME.currentTurn = 0;
     GAME.activePlayers = 2;
     GAME.players = [
-      { id: 'me', connected: true, ready: true, score: 0 },
-      { id: 'p2', connected: true, ready: true, score: 0 },
-      { id: 'p3', connected: false, ready: false, score: 0 }
+      { id: 'me', connected: true, score: 0 },
+      { id: 'p2', connected: true, score: 0 },
+      { id: 'p3', connected: false, score: 0 }
     ];
     this.enterGame();
   },
@@ -1658,7 +1667,6 @@ const UI = {
     const idx = GAME.players.findIndex(p => p.id === conn.peer);
     if (idx > 0) {
       GAME.players[idx].connected = false;
-      GAME.players[idx].ready = false;
       GAME.players[idx].id = null;
       this.updateFriendSlots();
       Network.broadcast({ type: 'players_update', players: GAME.players });
@@ -1666,23 +1674,23 @@ const UI = {
     }
   },
 
+  /* ──── message handler (host AND client) ──── */
   onData(data, conn) {
+    /* Messages received by host from clients need relaying to other clients. */
+    const relayToOthers = (msg) => {
+      if (GAME.isHost && GAME.mode === 'playing') {
+        Network.broadcastExcept(msg, conn);
+      }
+    };
+
     switch (data.type) {
       case 'hello': {
         if (!GAME.isHost) return;
         const slot = GAME.players.findIndex((p, i) => i > 0 && !p.connected);
         if (slot < 0) { Network.sendTo(conn, { type: 'room_full' }); return; }
         GAME.players[slot].connected = true;
-        GAME.players[slot].ready = true;
         GAME.players[slot].id = conn.peer;
-        Network.sendTo(conn, {
-          type: 'welcome',
-          playerIndex: slot,
-          players: GAME.players,
-          roomCode: GAME.roomCode,
-          snapshot: Physics.snapshot(),
-          currentTurn: GAME.currentTurn
-        });
+        Network.sendTo(conn, { type: 'welcome', playerIndex: slot, players: GAME.players, roomCode: GAME.roomCode });
         Network.broadcast({ type: 'players_update', players: GAME.players });
         this.updateFriendSlots();
         Toast.show('P' + (slot + 1) + ' joined', 'success', '🎉');
@@ -1693,11 +1701,9 @@ const UI = {
         GAME.myPlayerIndex = data.playerIndex;
         GAME.players = data.players;
         GAME.roomCode = data.roomCode;
-        if (data.snapshot) Physics.applySnapshot(data.snapshot);
-        if (typeof data.currentTurn === 'number') GAME.currentTurn = data.currentTurn;
         document.getElementById('connectingOverlay').classList.add('hidden');
         Toast.show('Connected as ' + playerLabel(GAME.myPlayerIndex), 'success', '🎉');
-        setTimeout(() => { Game.updateScores(); Game.updateTurnUI(); }, 100);
+        setTimeout(() => Game.updateScores(), 100);
         break;
       case 'room_full':
         document.getElementById('connectingOverlay').classList.add('hidden');
@@ -1713,14 +1719,45 @@ const UI = {
         GAME.currentTurn = 0;
         this.enterGame();
         break;
+
       case 'shot':
-        if (data.player !== GAME.myPlayerIndex && Physics.striker) {
-          Physics.striker.x = data.x; Physics.striker.y = data.y;
-          Physics.striker.vx = data.vx; Physics.striker.vy = data.vy;
+        /* Received on host from a client. Apply, then relay to other clients. */
+        if (GAME.isHost && Physics.striker) {
+          Physics.striker.x = data.x;
+          Physics.striker.y = data.y;
+          Physics.striker.vx = data.vx;
+          Physics.striker.vy = data.vy;
+          Game.isResolving = true;
+          Game.resolveStartTime = performance.now();
+          Game.turnHadFoul = false;
+          Game.turnPocketed = 0;
+          AudioManager.play('shoot');
+          relayToOthers({ type: 'shot_applied', player: data.player, x: data.x, y: data.y, vx: data.vx, vy: data.vy });
+        } else if (!GAME.isHost) {
+          /* Client receiving a shot from host (rare, only on relay). */
+          if (Physics.striker) {
+            Physics.striker.x = data.x;
+            Physics.striker.y = data.y;
+            Physics.striker.vx = data.vx;
+            Physics.striker.vy = data.vy;
+            Game.isResolving = true;
+            Game.resolveStartTime = performance.now();
+          }
+        }
+        break;
+
+      case 'shot_applied':
+        /* Client receives relayed shot from another client via host. */
+        if (!GAME.isHost && Physics.striker) {
+          Physics.striker.x = data.x;
+          Physics.striker.y = data.y;
+          Physics.striker.vx = data.vx;
+          Physics.striker.vy = data.vy;
           Game.isResolving = true;
           Game.resolveStartTime = performance.now();
         }
         break;
+
       case 'sync_state':
         if (GAME.isHost) return;
         Physics.applySnapshot(data.state);
@@ -1728,63 +1765,83 @@ const UI = {
           GAME.currentTurn = data.currentTurn;
           Game.updateTurnUI(); Game.updateWaitBar(); Game.updateAdjustSlider();
         }
-        if (data.players) { GAME.players = data.players; Game.updateScores(); }
-        break;
-      case 'striker_move':
-        if (data.player !== GAME.myPlayerIndex && Physics.striker && Physics.striker.active) {
-          Physics.striker.x = data.x; Physics.striker.y = data.y;
+        if (data.players) {
+          const sig = data.players.map(p => p.score).join(',');
+          if (sig !== Game._lastScoreSignature) {
+            Game._lastScoreSignature = sig;
+            GAME.players = data.players;
+            Game.updateScores();
+          }
         }
         break;
+
+      case 'striker_move':
+        /* Received on host from a client. Apply, then relay to other clients. */
+        if (GAME.isHost && Physics.striker && Physics.striker.active) {
+          Physics.striker.x = data.x;
+          Physics.striker.y = data.y;
+          relayToOthers({ type: 'striker_move', player: data.player, x: data.x, y: data.y });
+        } else if (!GAME.isHost && Physics.striker && Physics.striker.active) {
+          if (data.player !== GAME.myPlayerIndex) {
+            Physics.striker.x = data.x;
+            Physics.striker.y = data.y;
+          }
+        }
+        break;
+
       case 'turn_change':
         GAME.currentTurn = data.currentTurn;
         if (data.players) GAME.players = data.players;
         Physics.striker = Physics.createStriker(GAME.currentTurn, 0.5);
-        Game.currentTurnAtShot = GAME.currentTurn;
         Game.isResolving = false;
         Game.updateScores(); Game.updateTurnUI(); Game.updateAdjustSlider(); Game.updateWaitBar();
-        if (Physics.striker && GAME.currentTurn === GAME.myPlayerIndex) {
-          Network.broadcast({ type: 'striker_move', player: GAME.myPlayerIndex, x: Physics.striker.x, y: Physics.striker.y });
-        }
         break;
+
       case 'score_update':
         if (GAME.players[data.playerIndex]) {
           GAME.players[data.playerIndex].score = data.score;
           Game.updateScores();
         }
         break;
-      case 'chat_message':
-        this.showMessage(data.text);
+
+      case 'foul_striker':
+        if (!GAME.isHost && GAME.players[data.playerIndex]) {
+          GAME.players[data.playerIndex].score = data.score;
+          Game.updateScores();
+        }
         break;
+
+      case 'chat_message':
+        /* Received on host from a client. Show locally, relay to other clients. */
+        if (GAME.isHost) {
+          if (data.player !== GAME.myPlayerIndex) this.showMessage(data.text);
+          relayToOthers({ type: 'chat_message', text: data.text, player: data.player });
+        } else {
+          if (data.player !== GAME.myPlayerIndex) this.showMessage(data.text);
+        }
+        break;
+
       case 'game_over':
+        if (GAME.isHost) return;
         GAME.players = data.players;
         Game.updateScores();
         Game.showGameOver(data.winner);
         break;
+
       case 'play_again': this.playAgain(true); break;
+
       case 'request_play_again':
-        if (GAME.isHost) { Network.broadcast({ type: 'play_again' }); this.playAgain(true); }
-        break;
-      case 'ping':
-        Network._lastPingReceived = Date.now();
-        if (GAME.isHost) Network.sendTo(conn, { type: 'pong', t: data.t });
-        break;
-      case 'pong':
-        Network._lastPingReceived = Date.now();
+        if (GAME.isHost) {
+          Network.broadcast({ type: 'play_again' });
+          this.playAgain(true);
+        }
         break;
     }
   },
 
-  onNetError(err) {
+  onNetError() {
     document.getElementById('connectingOverlay').classList.add('hidden');
-    if (err && err.message === 'heartbeat-lost') {
-      Toast.show('Connection lost', 'error', '⚡');
-      Network.disconnect();
-      GAME.mode = 'menu';
-      document.getElementById('gameScreen').classList.add('hidden');
-      document.getElementById('mainMenu').classList.remove('hidden');
-    } else {
-      Toast.show('Network error', 'error', '✕');
-    }
+    Toast.show('Network error', 'error', '✕');
   },
 
   updateFriendSlots() {
@@ -1794,21 +1851,17 @@ const UI = {
       const avatar = slot.querySelector('.fs-avatar');
       const name = slot.querySelector('.fs-name');
       const tag = slot.querySelector('.fs-tag');
-      if (p.connected && p.ready) {
+      if (p.connected) {
         slot.classList.add('connected');
         avatar.classList.remove('empty'); avatar.textContent = (idx + 1);
         name.textContent = 'P' + (idx + 1); tag.textContent = 'Ready';
-      } else if (p.connected) {
-        slot.classList.remove('connected');
-        avatar.classList.add('empty'); avatar.textContent = (idx + 1);
-        name.textContent = 'Connecting…'; tag.textContent = 'Handshaking';
       } else {
         slot.classList.remove('connected');
         avatar.classList.add('empty'); avatar.textContent = (idx + 1);
         name.textContent = 'Waiting…'; tag.textContent = 'Not connected';
       }
     });
-    const count = GAME.players.filter(p => p.connected && p.ready).length;
+    const count = GAME.players.filter(p => p.connected).length;
     const btn = document.getElementById('startGameBtn');
     const btnText = document.getElementById('startBtnText');
     const hint = document.getElementById('waitingHint');
@@ -1871,7 +1924,7 @@ const UI = {
   },
 
   startGame() {
-    const count = GAME.players.filter(p => p.connected && p.ready).length;
+    const count = GAME.players.filter(p => p.connected).length;
     if (count < 3) { Toast.show('Need 3 players', 'error', '⚠'); return; }
     GAME.currentTurn = 0;
     AudioManager.play('click');
@@ -1917,9 +1970,9 @@ const UI = {
     GAME.currentTurn = 0; GAME.myPlayerIndex = 0;
     GAME.localMode = null; GAME.activePlayers = 3;
     GAME.players = [
-      { id: 'me', connected: true, ready: true, score: 0 },
-      { id: null, connected: false, ready: false, score: 0 },
-      { id: null, connected: false, ready: false, score: 0 }
+      { id: 'me', connected: true, score: 0 },
+      { id: null, connected: false, score: 0 },
+      { id: null, connected: false, score: 0 }
     ];
     document.getElementById('gameScreen').classList.add('hidden');
     document.getElementById('mainMenu').classList.remove('hidden');
@@ -1928,7 +1981,6 @@ const UI = {
     document.getElementById('joinModal').classList.add('hidden');
     document.getElementById('connectingOverlay').classList.add('hidden');
     Physics.pucks = []; Physics.striker = null;
-    Physics._pocketEvents = [];
     Renderer.pocketPops = [];
     FloatingText.items = [];
     Game.isResolving = false;
@@ -1943,13 +1995,11 @@ const UI = {
     GAME.currentTurn = 0;
     Physics.pucks = Physics.createPucks();
     Physics.striker = Physics.createStriker(0, 0.5);
-    Physics._pocketEvents = [];
     Renderer.pocketPops = [];
     FloatingText.items = [];
     Game.isResolving = false;
     Game.ended = false;
     Game._ending = false;
-    Game.currentTurnAtShot = 0;
     Game.updateScores(); Game.updateTurnUI(); Game.updateAdjustSlider(); Game.updateWaitBar();
     if (!fromRemote && GAME.mode === 'playing') {
       if (GAME.isHost) Network.broadcast({ type: 'play_again' });
@@ -1959,12 +2009,9 @@ const UI = {
 
   sendMessage(text) {
     AudioManager.play('click');
-    if (GAME.mode === 'local' || GAME.isPractice) {
-      this.showMessage(text);
-    } else if (GAME.mode === 'playing') {
+    this.showMessage(text);
+    if (GAME.mode === 'playing' && !GAME.isPractice) {
       Network.broadcast({ type: 'chat_message', text, player: GAME.myPlayerIndex });
-    } else {
-      this.showMessage(text);
     }
   },
 
@@ -2007,14 +2054,14 @@ function runOpening() {
     p += 12 + Math.random() * 8;
     if (p >= 100) {
       p = 100; clearInterval(iv);
-      setTimeout(() => { screen.classList.add('hidden'); menu.classList.remove('hidden'); }, 350);
+      setTimeout(() => { screen.classList.add('hidden'); menu.classList.remove('hidden'); }, 300);
     }
     fill.style.width = Math.min(p, 100) + '%';
-  }, 200);
+  }, 190);
   screen.addEventListener('click', () => {
     if (!screen.classList.contains('hidden')) {
       clearInterval(iv); fill.style.width = '100%';
-      setTimeout(() => { screen.classList.add('hidden'); menu.classList.remove('hidden'); }, 200);
+      setTimeout(() => { screen.classList.add('hidden'); menu.classList.remove('hidden'); }, 180);
     }
   });
 }
@@ -2035,7 +2082,7 @@ window.addEventListener('DOMContentLoaded', () => {
       const inputs = document.querySelectorAll('.digit-input');
       digits.forEach((d, i) => { if (inputs[i]) inputs[i].value = d; });
       UI.updateDigitState();
-    }, 2500);
+    }, 2400);
   }
 
   document.body.addEventListener('touchstart', () => AudioManager.init(), { once: true });
