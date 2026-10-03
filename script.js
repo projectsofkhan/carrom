@@ -1,23 +1,21 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P • v13
-   • Host-authoritative physics — no more score drift
-   • Clients forward input to host, host relays to others
-   • Chat, striker_move, shot all relay correctly (P2↔P3)
-   • Only host fires endTurn / endGame
-   • Striker foul counted once, on host only
-   • Slider still never lands the striker on a puck
-   • First to 100, second chance, aim from anywhere: kept
+   CARROM 3P • v14
+   • Host-authoritative physics (kept from v13)
+   • Faster turn handoff (near-instant)
+   • Local 2P split layout — top chip rotated 180° for friend
+   • Chat button hidden in local modes
+   • 3P local: chips at top + bottom (no rotation)
 ═══════════════════════════════════════════════════════════ */
 
 const WIN_SCORE = 100;
 const STRIKER_FOUL = -20;
 
 const GAME = {
-  mode: 'menu',              // menu | host | join | local | practice | playing
+  mode: 'menu',
   myPlayerIndex: 0,
   currentTurn: 0,
   isHost: false,
-  localMode: null,           // null | 'practice3p' | 'local2p'
+  localMode: null,
   isPractice: false,
   roomCode: null,
   players: [
@@ -34,11 +32,13 @@ const PLAYER_COLORS = ['#e63946', '#2a9d8f', '#9c6ade'];
 const POINTS = { black: 10, white: 20 };
 const playerLabel = i => (i === GAME.myPlayerIndex) ? 'YOU' : 'P' + (i + 1);
 
-/* Is this device the authority for physics / scoring? */
 function isAuthority() {
   if (GAME.mode === 'local' || GAME.mode === 'practice') return true;
   if (GAME.mode === 'playing' && GAME.isHost) return true;
   return false;
+}
+function isLocalMode() {
+  return GAME.mode === 'local' || GAME.mode === 'practice';
 }
 
 /* ───────── AUDIO ───────── */
@@ -68,7 +68,7 @@ const AudioManager = {
     if (ctx.createStereoPanner) {
       const p = ctx.createStereoPanner();
       p.pan.value = pan;
-      g.connect(p); g.connect(this._master || ctx.destination);
+      g.connect(p); p.connect(this._master || ctx.destination);
     } else g.connect(this._master || ctx.destination);
     return g;
   },
@@ -171,13 +171,13 @@ const Network = {
   onData: null, onError: null, onPeerJoin: null, onPeerLeave: null,
 
   generateCode() { return String(Math.floor(1000 + Math.random() * 9000)); },
-  generateClientId() { return 'c13-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
+  generateClientId() { return 'c14-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
 
   initHost(cb) {
     this.isHost = true;
     this.roomCode = this.generateCode();
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const peerId = 'c13-' + this.roomCode;
+    const peerId = 'c14-' + this.roomCode;
     return new Promise((resolve, reject) => {
       let settled = false, attempts = 0;
       const maxAttempts = 6;
@@ -224,7 +224,7 @@ const Network = {
     this.isHost = false;
     this.roomCode = roomCode;
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const hostPeerId = 'c13-' + roomCode;
+    const hostPeerId = 'c14-' + roomCode;
     const clientId = this.generateClientId();
     return new Promise((resolve, reject) => {
       let settled = false, retries = 0;
@@ -310,17 +310,13 @@ const Network = {
     conn.on('error', e => console.error('host conn error:', e));
   },
 
-  /* Send to all. On client, this only reaches the host. */
   broadcast(data) { this.connections.forEach(c => { if (c.open) { try { c.send(data); } catch (e) {} } }); },
-
-  /* Send to all EXCEPT a specific connection. Host uses this to relay. */
   broadcastExcept(data, excludeConn) {
     this.connections.forEach(c => {
       if (c === excludeConn) return;
       if (c.open) { try { c.send(data); } catch (e) {} }
     });
   },
-
   sendTo(conn, data) { if (conn && conn.open) { try { conn.send(data); } catch (e) {} } },
   disconnect() { if (this.peer) { try { this.peer.destroy(); } catch (e) {} this.peer = null; } this.connections = []; }
 };
@@ -374,6 +370,7 @@ const Physics = {
   },
 
   slotForPlayer(playerIndex) {
+    /* 2P local: P1 at bottom (slot 0), P2 at top (slot 2) */
     if (GAME.mode === 'local' && GAME.localMode === 'local2p') {
       return playerIndex === 0 ? 0 : 2;
     }
@@ -796,7 +793,7 @@ const Renderer = {
 
   drawBaseline() {
     if (GAME.mode === 'menu') return;
-    const isLocal = GAME.mode === 'local' || GAME.isPractice;
+    const isLocal = isLocalMode();
     const isMyTurn = isLocal || GAME.currentTurn === GAME.myPlayerIndex;
     if (!isMyTurn) return;
     const s = Physics.striker;
@@ -879,7 +876,7 @@ const Renderer = {
     const ctx = this.ctx;
     const r = s.radius;
     const isMoving = Math.hypot(s.vx, s.vy) > 0.3;
-    const isLocal = GAME.mode === 'local' || GAME.isPractice;
+    const isLocal = isLocalMode();
     const isMyTurn = isLocal || GAME.currentTurn === GAME.myPlayerIndex;
 
     if (!isMoving && isMyTurn && GAME.mode !== 'menu') {
@@ -934,7 +931,7 @@ const Renderer = {
 
   drawAim() {
     if (!Input.isAiming) return;
-    const isLocal = GAME.mode === 'local' || GAME.isPractice;
+    const isLocal = isLocalMode();
     const isMyTurn = isLocal || GAME.currentTurn === GAME.myPlayerIndex;
     if (!isMyTurn) return;
     const s = Physics.striker;
@@ -1007,7 +1004,7 @@ const Input = {
 
   canShoot() {
     if (GAME.mode !== 'playing' && GAME.mode !== 'local' && !GAME.isPractice) return false;
-    const isLocal = GAME.mode === 'local' || GAME.isPractice;
+    const isLocal = isLocalMode();
     if (!isLocal && GAME.currentTurn !== GAME.myPlayerIndex) return false;
     const s = Physics.striker;
     if (!s || !s.active) return false;
@@ -1068,26 +1065,18 @@ const Input = {
     const vy = Math.sin(angle) * power;
 
     if (GAME.mode === 'playing' && !GAME.isPractice && !GAME.isHost) {
-      /* Client: apply a local prediction (visual only), then tell the host */
       s.vx = vx; s.vy = vy;
-      Network.broadcast({
-        type: 'shot', player: GAME.myPlayerIndex,
-        vx, vy, x: s.x, y: s.y
-      });
+      Network.broadcast({ type: 'shot', player: GAME.myPlayerIndex, vx, vy, x: s.x, y: s.y });
       Game.isResolving = true;
       Game.resolveStartTime = performance.now();
       AudioManager.play('shoot');
       return;
     }
 
-    /* Host or local: apply directly */
     s.vx = vx; s.vy = vy;
     AudioManager.play('shoot');
     if (GAME.mode === 'playing' && !GAME.isPractice && GAME.isHost) {
-      Network.broadcast({
-        type: 'shot', player: GAME.myPlayerIndex,
-        vx, vy, x: s.x, y: s.y
-      });
+      Network.broadcast({ type: 'shot', player: GAME.myPlayerIndex, vx, vy, x: s.x, y: s.y });
     }
     Game.isResolving = true;
     Game.resolveStartTime = performance.now();
@@ -1125,6 +1114,7 @@ const Game = {
     this.ended = false;
     this._ending = false;
     this._lastScoreSignature = '';
+    UI.applyLayoutForMode();
     this.updateAdjustSlider();
     this.updateWaitBar();
     this.lastTime = performance.now();
@@ -1137,7 +1127,6 @@ const Game = {
     this.lastTime = t;
     Renderer.time += dt;
 
-    /* Only the authority runs physics on shared state. Clients just render. */
     if (isAuthority()) {
       Physics.step(
         (intensity, x, y) => {
@@ -1210,10 +1199,8 @@ const Game = {
         }
       }
     } else {
-      /* Client: just advance visual physics for smooth motion between snapshots */
       if (this.isResolving) {
         const elapsed = t - this.resolveStartTime;
-        /* Timeout safety — host should have told us by now */
         if (elapsed > 12500) this.isResolving = false;
       }
     }
@@ -1225,9 +1212,7 @@ const Game = {
   },
 
   handlePocket(body, pocket, isStriker) {
-    /* Only the authority scores. Clients never call this because they don't step physics. */
     if (!isAuthority()) return;
-
     const pan = (body.x / Physics.W) * 2 - 1;
     Renderer.addPocketPop(pocket.x, pocket.y, body.color);
 
@@ -1358,34 +1343,73 @@ const Game = {
   },
 
   updateTurnUI() {
-    const is2P = GAME.mode === 'local' && GAME.localMode === 'local2p';
-    const chips = document.querySelectorAll('.player-chip');
-    chips.forEach((c, i) => {
-      let visible = i < GAME.activePlayers;
-      if (is2P) visible = (i === 0 || i === 2);
-      c.classList.toggle('hidden-chip', !visible);
+    /* Online chips */
+    document.querySelectorAll('.player-chip').forEach((c, i) => {
       c.classList.toggle('active', i === GAME.currentTurn);
-      const dot = c.querySelector('.pc-dot');
-      const nameEl = c.querySelector('.pc-name');
-      if (is2P) {
-        if (i === 0) { if (dot) dot.style.background = PLAYER_COLORS[0]; if (nameEl) nameEl.textContent = 'YOU'; }
-        else if (i === 2) { if (dot) dot.style.background = PLAYER_COLORS[1]; if (nameEl) nameEl.textContent = 'P2'; }
-      } else {
-        if (dot) dot.style.background = PLAYER_COLORS[i];
-        if (nameEl) {
-          if (i === 0) nameEl.textContent = 'YOU';
-          else if (i === 2) nameEl.textContent = 'P3';
-          else nameEl.textContent = 'P2';
-        }
-      }
+      c.classList.toggle('hidden-chip', i >= GAME.activePlayers);
     });
+
+    /* Local: friend chip (top) and P3 chip */
+    const friendChip = document.getElementById('friendChip');
+    const friendChipDot = document.getElementById('friendChipDot');
+    const friendChipName = document.getElementById('friendChipName');
+    const friendChipScore = document.getElementById('friendChipScore');
+    const friendTurnRow = document.getElementById('friendTurnRow');
+    const friendTurnSwatch = document.getElementById('friendTurnSwatch');
+    const friendTurnLabel = document.getElementById('friendTurnLabel');
+
+    if (GAME.mode === 'local' && GAME.localMode === 'local2p') {
+      /* P2 is at slot 2 (top), chip 3 is hidden, chip 2 not used */
+      if (friendChip) {
+        friendChip.classList.remove('hidden');
+        friendChip.classList.add('rotated-180');
+        friendChip.classList.toggle('active', GAME.currentTurn === 1);
+      }
+      if (friendChipDot) friendChipDot.style.background = PLAYER_COLORS[1];
+      if (friendChipName) friendChipName.textContent = 'P2';
+      if (friendChipScore) friendChipScore.textContent = GAME.players[1].score;
+      if (friendTurnRow) {
+        friendTurnRow.classList.remove('hidden');
+        friendTurnRow.classList.add('rotated-180');
+      }
+      if (friendTurnSwatch) friendTurnSwatch.style.background = PLAYER_COLORS[GAME.currentTurn];
+      if (friendTurnLabel) {
+        friendTurnLabel.textContent = (GAME.currentTurn === 1) ? "P2's turn" :
+          (GAME.currentTurn === 0 ? "Your turn (bottom)" : '');
+      }
+    } else if (GAME.mode === 'local' && GAME.localMode === 'practice3p') {
+      /* 3P local: use the friend chip for P3 (top). P2 chip stays in the online row on the left. */
+      if (friendChip) {
+        friendChip.classList.remove('hidden');
+        friendChip.classList.remove('rotated-180');
+      }
+      if (friendChipDot) friendChipDot.style.background = PLAYER_COLORS[2];
+      if (friendChipName) friendChipName.textContent = 'P3';
+      if (friendChipScore) friendChipScore.textContent = GAME.players[2].score;
+      if (friendTurnRow) friendTurnRow.classList.add('hidden');
+    } else {
+      if (friendChip) friendChip.classList.add('hidden');
+      if (friendTurnRow) friendTurnRow.classList.add('hidden');
+    }
+
+    /* Turn row (bottom, for "you") */
     const swatch = document.getElementById('turnSwatch');
     const label = document.getElementById('turnLabel');
     swatch.style.background = PLAYER_COLORS[GAME.currentTurn];
-    const isLocal = GAME.mode === 'local' || GAME.isPractice;
-    if (isLocal || GAME.currentTurn === GAME.myPlayerIndex) label.textContent = 'YOUR TURN';
-    else label.textContent = playerLabel(GAME.currentTurn) + "'S TURN";
-    document.getElementById('boardFrame').classList.toggle('active', isLocal || GAME.currentTurn === GAME.myPlayerIndex);
+    const isLocal = isLocalMode();
+    if (isLocal) {
+      if (GAME.currentTurn === 0) label.textContent = 'Your turn';
+      else if (GAME.mode === 'local' && GAME.localMode === 'local2p') label.textContent = "P2's turn ↑";
+      else label.textContent = (GAME.currentTurn === 1 ? "P2's turn (left)" : "P3's turn ↑");
+    } else {
+      if (GAME.currentTurn === GAME.myPlayerIndex) label.textContent = 'YOUR TURN';
+      else label.textContent = playerLabel(GAME.currentTurn) + "'S TURN";
+    }
+
+    document.getElementById('boardFrame').classList.toggle(
+      'active',
+      isLocal || GAME.currentTurn === GAME.myPlayerIndex
+    );
   },
 
   updateAdjustSlider() {
@@ -1393,7 +1417,7 @@ const Game = {
     const thumb = document.getElementById('adjustThumb');
     const fill = document.getElementById('adjustFill');
     const track = document.getElementById('adjustTrack');
-    const isLocal = GAME.mode === 'local' || GAME.isPractice;
+    const isLocal = isLocalMode();
     const isMyTurn = isLocal || GAME.currentTurn === GAME.myPlayerIndex;
     if (!isMyTurn || !Physics.striker || !Physics.striker.active || this.isResolving) {
       row.classList.add('hidden'); return;
@@ -1442,7 +1466,7 @@ const Game = {
   updateWaitBar() {
     const bar = document.getElementById('waitBar');
     const text = document.getElementById('waitBarText');
-    const isLocal = GAME.mode === 'local' || GAME.isPractice;
+    const isLocal = isLocalMode();
     if (isLocal || GAME.mode === 'menu') { bar.classList.add('hidden'); return; }
     const isMyTurn = GAME.currentTurn === GAME.myPlayerIndex;
     if (isMyTurn) { bar.classList.add('hidden'); return; }
@@ -1452,6 +1476,7 @@ const Game = {
 
   updateScores() {
     const is2P = GAME.mode === 'local' && GAME.localMode === 'local2p';
+    /* Online chips */
     GAME.players.forEach((p, i) => {
       const el = document.getElementById('scoreP' + i);
       if (el) el.textContent = p.score;
@@ -1467,9 +1492,16 @@ const Game = {
         else if (idx === 2) nameEl.textContent = is2P ? 'P2' : 'P3';
       }
       let visible = idx < GAME.activePlayers;
-      if (is2P) visible = (idx === 0 || idx === 2);
+      if (is2P) visible = false; /* hidden entirely in local 2P */
       chip.classList.toggle('hidden-chip', !visible);
     });
+
+    /* Local chips */
+    const friendChipScore = document.getElementById('friendChipScore');
+    if (friendChipScore) {
+      if (is2P) friendChipScore.textContent = GAME.players[1].score;
+      else if (GAME.mode === 'local' && GAME.localMode === 'practice3p') friendChipScore.textContent = GAME.players[2].score;
+    }
   }
 };
 
@@ -1523,6 +1555,41 @@ const UI = {
     document.getElementById('goMenuBtn').addEventListener('click', () => this.goMenu());
     this.setupDigitInputs();
     this.setupChatDropdown();
+  },
+
+  /* Show/hide top chips, chat button, legend depending on mode */
+  applyLayoutForMode() {
+    const playersRow = document.getElementById('playersRow');
+    const chatToggle = document.getElementById('chatToggle');
+    const gameTopbar = document.getElementById('gameTopbar');
+    const friendChip = document.getElementById('friendChip');
+    const friendTurnRow = document.getElementById('friendTurnRow');
+    const legendRow = document.querySelector('.legend-row');
+
+    if (isLocalMode()) {
+      playersRow.classList.add('hidden-row');
+      chatToggle.classList.add('hidden-toggle');
+      gameTopbar.classList.add('compact');
+      if (GAME.mode === 'local' && GAME.localMode === 'local2p') {
+        friendChip.classList.remove('hidden');
+        friendChip.classList.add('rotated-180');
+        friendTurnRow.classList.remove('hidden');
+        friendTurnRow.classList.add('rotated-180');
+      } else if (GAME.mode === 'local' && GAME.localMode === 'practice3p') {
+        friendChip.classList.remove('hidden');
+        friendChip.classList.remove('rotated-180');
+        friendTurnRow.classList.add('hidden');
+      }
+      /* Hide legend in local modes to save space */
+      if (legendRow) legendRow.style.display = 'none';
+    } else {
+      playersRow.classList.remove('hidden-row');
+      chatToggle.classList.remove('hidden-toggle');
+      gameTopbar.classList.remove('compact');
+      friendChip.classList.add('hidden');
+      friendTurnRow.classList.add('hidden');
+      if (legendRow) legendRow.style.display = '';
+    }
   },
 
   setupChatDropdown() {
@@ -1674,9 +1741,7 @@ const UI = {
     }
   },
 
-  /* ──── message handler (host AND client) ──── */
   onData(data, conn) {
-    /* Messages received by host from clients need relaying to other clients. */
     const relayToOthers = (msg) => {
       if (GAME.isHost && GAME.mode === 'playing') {
         Network.broadcastExcept(msg, conn);
@@ -1721,7 +1786,6 @@ const UI = {
         break;
 
       case 'shot':
-        /* Received on host from a client. Apply, then relay to other clients. */
         if (GAME.isHost && Physics.striker) {
           Physics.striker.x = data.x;
           Physics.striker.y = data.y;
@@ -1734,7 +1798,6 @@ const UI = {
           AudioManager.play('shoot');
           relayToOthers({ type: 'shot_applied', player: data.player, x: data.x, y: data.y, vx: data.vx, vy: data.vy });
         } else if (!GAME.isHost) {
-          /* Client receiving a shot from host (rare, only on relay). */
           if (Physics.striker) {
             Physics.striker.x = data.x;
             Physics.striker.y = data.y;
@@ -1747,7 +1810,6 @@ const UI = {
         break;
 
       case 'shot_applied':
-        /* Client receives relayed shot from another client via host. */
         if (!GAME.isHost && Physics.striker) {
           Physics.striker.x = data.x;
           Physics.striker.y = data.y;
@@ -1776,7 +1838,6 @@ const UI = {
         break;
 
       case 'striker_move':
-        /* Received on host from a client. Apply, then relay to other clients. */
         if (GAME.isHost && Physics.striker && Physics.striker.active) {
           Physics.striker.x = data.x;
           Physics.striker.y = data.y;
@@ -1812,7 +1873,6 @@ const UI = {
         break;
 
       case 'chat_message':
-        /* Received on host from a client. Show locally, relay to other clients. */
         if (GAME.isHost) {
           if (data.player !== GAME.myPlayerIndex) this.showMessage(data.text);
           relayToOthers({ type: 'chat_message', text: data.text, player: data.player });
