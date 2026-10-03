@@ -1,13 +1,15 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P • v12
-   • Fixed pocket double-count (score applied once)
-   • Striker foul applied once
-   • Snap only when no puck is close to a pocket
-   • Adjust slider never lands the striker on a puck
-   • Striker pushed only along the baseline
-   • endTurn shows a single toast/sound
-   • endGame fired once
-   • 2P local: P2 uses chip #3 position & teal colour
+   CARROM 3P • v13
+   • Score/pocket: events collected by Physics and drained once
+     per frame in Game.loop (fixes double count & wrong player)
+   • Clients do NOT simulate — host is authoritative
+   • Heartbeat ping/pong keeps player list accurate
+   • Late-join gets an initial sync_state in the welcome
+   • Chat echoes through the host (no false local bubble)
+   • Slight force reduction (MAX_POWER 23, restitution 0.93)
+   • Mass ~ r² in collision resolution
+   • Turn and pocket counters snap cleanly even on same-frame
+     striker stop + puck drop
 ═══════════════════════════════════════════════════════════ */
 
 const WIN_SCORE = 100;
@@ -22,9 +24,9 @@ const GAME = {
   isPractice: false,
   roomCode: null,
   players: [
-    { id: 'me', connected: true, score: 0 },
-    { id: null, connected: false, score: 0 },
-    { id: null, connected: false, score: 0 }
+    { id: 'me', connected: true, ready: true, score: 0 },
+    { id: null, connected: false, ready: false, score: 0 },
+    { id: null, connected: false, ready: false, score: 0 }
   ],
   activePlayers: 3,
   audioEnabled: true,
@@ -163,15 +165,16 @@ const AudioManager = {
 const Network = {
   peer: null, connections: [], isHost: false, roomCode: null,
   onData: null, onError: null, onPeerJoin: null, onPeerLeave: null,
+  _lastPingSent: 0, _lastPingReceived: 0, _pingTimer: null,
 
   generateCode() { return String(Math.floor(1000 + Math.random() * 9000)); },
-  generateClientId() { return 'c12-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
+  generateClientId() { return 'c13-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
 
   initHost(cb) {
     this.isHost = true;
     this.roomCode = this.generateCode();
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const peerId = 'c12-' + this.roomCode;
+    const peerId = 'c13-' + this.roomCode;
     return new Promise((resolve, reject) => {
       let settled = false, attempts = 0;
       const maxAttempts = 6;
@@ -218,7 +221,7 @@ const Network = {
     this.isHost = false;
     this.roomCode = roomCode;
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const hostPeerId = 'c12-' + roomCode;
+    const hostPeerId = 'c13-' + roomCode;
     const clientId = this.generateClientId();
     return new Promise((resolve, reject) => {
       let settled = false, retries = 0;
@@ -253,6 +256,7 @@ const Network = {
               });
               conn.on('error', e => console.error('conn error:', e));
               setTimeout(() => { try { conn.send({ type: 'hello' }); } catch (e) {} }, 100);
+              this._startPingTimer();
               AudioManager.play('connect'); resolve(conn);
             });
             conn.on('error', err => {
@@ -290,10 +294,26 @@ const Network = {
     });
   },
 
+  _startPingTimer() {
+    if (this._pingTimer) return;
+    this._pingTimer = setInterval(() => {
+      if (!this.connections.length) return;
+      this.broadcast({ type: 'ping', t: Date.now() });
+      /* Detect host silence on client side */
+      if (!this.isHost) {
+        const gap = Date.now() - this._lastPingReceived;
+        if (this._lastPingReceived > 0 && gap > 8000) {
+          if (this.onError) this.onError(new Error('heartbeat-lost'));
+        }
+      }
+    }, 3000);
+  },
+
   setupConnection(conn) {
     conn.on('open', () => {
       if (!this.connections.includes(conn)) this.connections.push(conn);
       AudioManager.play('connect');
+      /* fire onPeerJoin on raw open, but the app waits for 'hello' before ready */
       if (this.onPeerJoin) this.onPeerJoin(conn);
     });
     conn.on('data', d => { if (this.onData) this.onData(d, conn); });
@@ -304,9 +324,23 @@ const Network = {
     conn.on('error', e => console.error('host conn error:', e));
   },
 
-  broadcast(data) { this.connections.forEach(c => { if (c.open) { try { c.send(data); } catch (e) {} } }); },
+  /* Rebuild connection list from live peers (used after reconnect) */
+  resyncConnections() {
+    this.connections = this.connections.filter(c => c && c.open);
+  },
+
+  broadcast(data) {
+    this.resyncConnections();
+    this.connections.forEach(c => {
+      if (c.open) { try { c.send(data); } catch (e) { console.warn('send failed', e); } }
+    });
+  },
   sendTo(conn, data) { if (conn && conn.open) { try { conn.send(data); } catch (e) {} } },
-  disconnect() { if (this.peer) { try { this.peer.destroy(); } catch (e) {} this.peer = null; } this.connections = []; }
+  disconnect() {
+    if (this._pingTimer) { clearInterval(this._pingTimer); this._pingTimer = null; }
+    if (this.peer) { try { this.peer.destroy(); } catch (e) {} this.peer = null; }
+    this.connections = [];
+  }
 };
 
 /* ───────── PHYSICS ───────── */
@@ -320,10 +354,11 @@ const Physics = {
   WALL_BOUNCE: 0.8,
   MIN_SPEED: 0.05,
   ALMOST_STOP_SPEED: 0.35,
-  MAX_POWER: 26,
-  RESTITUTION: 0.94,
+  MAX_POWER: 23,
+  RESTITUTION: 0.93,
 
   pockets: [], pucks: [], striker: null,
+  _pocketEvents: [],
 
   init() {
     const b = this.bounds();
@@ -333,6 +368,7 @@ const Physics = {
       { x: b.left,  y: b.bottom },
       { x: b.right, y: b.bottom }
     ];
+    this._pocketEvents = [];
   },
 
   bounds() {
@@ -410,7 +446,6 @@ const Physics = {
     return s;
   },
 
-  /* Slide the striker only along the baseline (keeps slider in sync) */
   separateFromPucksAlongBaseline(s) {
     const slot = this.slotForPlayer(GAME.currentTurn);
     const base = this.getBaseline(slot);
@@ -423,7 +458,6 @@ const Physics = {
         const minD = s.radius + puck.radius + 1;
         if (d < minD) {
           overlap = true;
-          /* Push along the baseline axis only, in the direction that increases clearance */
           const step = (minD - d) + 0.5;
           if (base.axis === 'x') {
             s.x += (s.x >= puck.x ? 1 : -1) * step;
@@ -467,7 +501,6 @@ const Physics = {
       r = tryPct(targetPct + d); if (r) return r;
       r = tryPct(targetPct - d); if (r) return r;
     }
-    /* Fallback: walk the whole baseline and pick the safest slot */
     let best = null, bestDist = -Infinity;
     for (let p = 0; p <= 1.0001; p += 0.01) {
       const clamped = Math.max(0, Math.min(1, p));
@@ -502,7 +535,9 @@ const Physics = {
     const dvx = b.vx - a.vx, dvy = b.vy - a.vy;
     const vn = dvx * nx + dvy * ny;
     if (vn > 0) return;
-    const invA = 1 / a.radius, invB = 1 / b.radius;
+    /* mass ∝ area ∝ radius² */
+    const invA = 1 / (a.radius * a.radius);
+    const invB = 1 / (b.radius * b.radius);
     const j = -(1 + this.RESTITUTION) * vn / (invA + invB);
     const clampedJ = Math.max(-24, Math.min(24, j));
     const ix = clampedJ * nx, iy = clampedJ * ny;
@@ -578,6 +613,8 @@ const Physics = {
     if (hitWall && onWall) onWall(body, wallSpeed);
   },
 
+  /* Collect pocket events instead of firing callbacks per frame.
+     Game.loop drains this array once per frame. */
   checkPockets(body, onPocket, isStriker) {
     if (body.pocketed || !body.active) return false;
     for (const p of this.pockets) {
@@ -585,10 +622,10 @@ const Physics = {
       const d2 = dx * dx + dy * dy;
       const hit = this.POCKET_RADIUS - 2;
       if (d2 < hit * hit) {
-        /* Mark BEFORE callback so any re-entrant call is a no-op */
         body.active = false;
         body.pocketed = true;
         body.vx = 0; body.vy = 0;
+        this._pocketEvents.push({ body, pocket: p, isStriker });
         if (onPocket) onPocket(body, p, isStriker);
         return true;
       }
@@ -596,10 +633,14 @@ const Physics = {
     return false;
   },
 
-  /* Is any active body close to a pocket? Used to avoid snapping a puck
-     that's about to drop. */
+  drainPocketEvents() {
+    const ev = this._pocketEvents;
+    this._pocketEvents = [];
+    return ev;
+  },
+
   anyBodyApproachingPocket() {
-    const R = this.POCKET_RADIUS * 1.6;
+    const R = this.POCKET_RADIUS * 1.25;
     const check = (body) => {
       if (!body || !body.active) return false;
       for (const p of this.pockets) {
@@ -611,6 +652,26 @@ const Physics = {
     if (check(this.striker)) return true;
     for (const p of this.pucks) if (check(p)) return true;
     return false;
+  },
+
+  /* Force any active body that is basically on top of a pocket into it. */
+  forcePocketIfTouching() {
+    const R = this.POCKET_RADIUS * 0.9;
+    const tryBody = (body, isStriker) => {
+      if (!body || !body.active || body.pocketed) return;
+      for (const p of this.pockets) {
+        const dx = body.x - p.x, dy = body.y - p.y;
+        if (dx * dx + dy * dy < R * R) {
+          body.active = false;
+          body.pocketed = true;
+          body.vx = 0; body.vy = 0;
+          this._pocketEvents.push({ body, pocket: p, isStriker });
+          return;
+        }
+      }
+    };
+    tryBody(this.striker, true);
+    for (const p of this.pucks) tryBody(p, false);
   },
 
   allStopped() {
@@ -656,7 +717,7 @@ const Physics = {
   }
 };
 
-/* ───────── RENDERER ───────── */
+/* ───────── RENDERER (unchanged from v12) ───────── */
 const Renderer = {
   canvas: null, ctx: null, W: 700, H: 700, time: 0, pocketPops: [],
 
@@ -750,7 +811,6 @@ const Renderer = {
     ctx.fillStyle = '#8a5a20';
     ctx.fill();
 
-    /* Base-line sight rings */
     const is2P = GAME.mode === 'local' && GAME.localMode === 'local2p';
     const slotCount = is2P ? 2 : GAME.activePlayers;
     for (let pi = 0; pi < slotCount; pi++) {
@@ -1058,6 +1118,10 @@ const Input = {
     s.vx = Math.cos(angle) * power;
     s.vy = Math.sin(angle) * power;
     AudioManager.play('shoot');
+    /* Freeze the shooter BEFORE the shot runs */
+    Game.currentTurnAtShot = GAME.currentTurn;
+    Game.turnHadFoul = false;
+    Game.turnPocketed = 0;
     if (GAME.mode === 'playing' && !GAME.isPractice) {
       Network.broadcast({
         type: 'shot', player: GAME.myPlayerIndex,
@@ -1066,8 +1130,6 @@ const Input = {
     }
     Game.isResolving = true;
     Game.resolveStartTime = performance.now();
-    Game.turnHadFoul = false;
-    Game.turnPocketed = 0;
   },
 
   onCancel() {
@@ -1085,6 +1147,7 @@ const Input = {
 const Game = {
   isResolving: false, resolveStartTime: 0, loopId: null, lastTime: 0,
   turnHadFoul: false, turnPocketed: 0, ended: false,
+  currentTurnAtShot: 0,
   _lastNetTick: 0, _lastRollSound: 0, _ending: false,
 
   start() {
@@ -1098,6 +1161,7 @@ const Game = {
     this.turnPocketed = 0;
     this.ended = false;
     this._ending = false;
+    this.currentTurnAtShot = GAME.currentTurn;
     this.updateAdjustSlider();
     this.updateWaitBar();
     this.lastTime = performance.now();
@@ -1105,48 +1169,64 @@ const Game = {
     this.loop(this.lastTime);
   },
 
+  /* Is this device the physics authority? */
+  isAuthority() {
+    if (GAME.mode === 'local' || GAME.isPractice) return true;
+    if (GAME.mode === 'playing') return GAME.isHost;
+    return false;
+  },
+
   loop(t) {
     const dt = Math.min((t - this.lastTime) / 1000, 0.05);
     this.lastTime = t;
     Renderer.time += dt;
 
-    Physics.step(
-      (intensity, x, y) => {
-        const pan = (x / Physics.W) * 2 - 1;
-        const strikerInvolved = Physics.striker && Physics.striker.active &&
-          Math.hypot(Physics.striker.x - x, Physics.striker.y - y) < 60;
-        if (strikerInvolved) AudioManager.play('striker_hit', { pan, volume: Math.min(0.55 + intensity * 0.55, 1) });
-        else if (intensity > 0.7) AudioManager.play('puck_hit_hard', { pan, volume: Math.min(intensity, 1) });
-        else if (intensity > 0.35) AudioManager.play('puck_hit_med', { pan, volume: Math.min(intensity + 0.15, 0.9) });
-        else AudioManager.play('puck_hit_soft', { pan, volume: Math.min(intensity + 0.3, 0.8) });
-      },
-      (body, pocket, isStriker) => this.handlePocket(body, pocket, isStriker),
-      (body, wallSpeed) => {
-        const pan = (body.x / Physics.W) * 2 - 1;
-        const v = Math.min(wallSpeed / 14, 1);
-        if (v < 0.15) return;
-        if (v > 0.5) AudioManager.play('wall_thud', { pan, volume: v });
-        else AudioManager.play('wall_tick', { pan, volume: 0.4 + v * 0.4 });
-      },
-      (striker) => {
-        const now = performance.now();
-        if (now - this._lastRollSound > 80) {
-          this._lastRollSound = now;
-          const pan = (striker.x / Physics.W) * 2 - 1;
-          const spd = Math.hypot(striker.vx, striker.vy);
-          AudioManager.play('striker_roll', { pan, volume: Math.min(0.12 + spd / 34, 0.4) });
-        }
-      }
-    );
+    const authority = this.isAuthority();
 
-    if (this.isResolving) {
+    if (authority) {
+      Physics.step(
+        (intensity, x, y) => {
+          const pan = (x / Physics.W) * 2 - 1;
+          const strikerInvolved = Physics.striker && Physics.striker.active &&
+            Math.hypot(Physics.striker.x - x, Physics.striker.y - y) < 60;
+          if (strikerInvolved) AudioManager.play('striker_hit', { pan, volume: Math.min(0.55 + intensity * 0.55, 1) });
+          else if (intensity > 0.7) AudioManager.play('puck_hit_hard', { pan, volume: Math.min(intensity, 1) });
+          else if (intensity > 0.35) AudioManager.play('puck_hit_med', { pan, volume: Math.min(intensity + 0.15, 0.9) });
+          else AudioManager.play('puck_hit_soft', { pan, volume: Math.min(intensity + 0.3, 0.8) });
+        },
+        () => { /* handled by drainPocketEvents in loop */ },
+        (body, wallSpeed) => {
+          const pan = (body.x / Physics.W) * 2 - 1;
+          const v = Math.min(wallSpeed / 14, 1);
+          if (v < 0.15) return;
+          if (v > 0.5) AudioManager.play('wall_thud', { pan, volume: v });
+          else AudioManager.play('wall_tick', { pan, volume: 0.4 + v * 0.4 });
+        },
+        (striker) => {
+          const now = performance.now();
+          if (now - this._lastRollSound > 80) {
+            this._lastRollSound = now;
+            const pan = (striker.x / Physics.W) * 2 - 1;
+            const spd = Math.hypot(striker.vx, striker.vy);
+            AudioManager.play('striker_roll', { pan, volume: Math.min(0.12 + spd / 34, 0.4) });
+          }
+        }
+      );
+      /* Drain pocket events once, after physics, so no double-count and
+         the shooter credit is stable. */
+      this.drainPockets();
+    }
+
+    if (this.isResolving && authority) {
       const elapsed = t - this.resolveStartTime;
-      /* Snap only if no body is close to a pocket (so we don't freeze a dropping puck) */
       if (Physics.almostStopped() && !Physics.anyBodyApproachingPocket()) {
         Physics.snapAll();
       }
       const fullyStopped = Physics.allStopped();
       if (fullyStopped || elapsed > 12000) {
+        /* Last chance to catch a puck that stopped on the rim */
+        Physics.forcePocketIfTouching();
+        this.drainPockets();
         this.isResolving = false;
         if (GAME.mode === 'playing' && GAME.isHost) {
           Network.broadcast({
@@ -1160,6 +1240,7 @@ const Game = {
       }
     }
 
+    /* Host: broadcast state while shot is active */
     if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
       const moving = !Physics.allStopped();
       if (moving || this.isResolving) {
@@ -1171,12 +1252,12 @@ const Game = {
       }
     }
 
-    if (!this.ended) {
+    if (!this.ended && authority) {
       const winner = this.checkWinner();
       if (winner !== -1) {
         this.ended = true;
         this.endGame(winner);
-      } else if (Physics.activePucksCount() === 0 && !this.isResolving) {
+      } else if (Physics.activePucksCount() === 0 && !this.isResolving && Physics.allStopped()) {
         this.ended = true;
         this.endGame(-1);
       }
@@ -1188,37 +1269,37 @@ const Game = {
     this.loopId = requestAnimationFrame(this.loop.bind(this));
   },
 
-  /* Centralised pocket handler — runs exactly once per body */
-  handlePocket(body, pocket, isStriker) {
-    const pan = (body.x / Physics.W) * 2 - 1;
-    Renderer.addPocketPop(pocket.x, pocket.y, body.color);
+  drainPockets() {
+    const events = Physics.drainPocketEvents();
+    if (!events.length) return;
+    /* Credit goes to the shooter of this turn. */
+    const shooter = this.currentTurnAtShot;
+    for (const ev of events) {
+      const { body, pocket, isStriker } = ev;
+      const pan = (body.x / Physics.W) * 2 - 1;
+      Renderer.addPocketPop(pocket.x, pocket.y, body.color);
 
-    if (isStriker) {
-      AudioManager.play('striker_pocket', { pan });
-      this.turnHadFoul = true;
-      const idx = GAME.currentTurn;
-      GAME.players[idx].score = Math.max(0, GAME.players[idx].score + STRIKER_FOUL);
-      FloatingText.spawn(pocket.x, pocket.y - 20, `${STRIKER_FOUL}`, '#dc2626');
-      Toast.show(`Foul! Striker pocketed · ${STRIKER_FOUL} pts`, 'error', '⚠');
-      this.updateScores();
-      if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
-        Network.broadcast({ type: 'score_update', playerIndex: idx, score: GAME.players[idx].score });
+      if (isStriker) {
+        AudioManager.play('striker_pocket', { pan });
+        this.turnHadFoul = true;
+        GAME.players[shooter].score = Math.max(0, GAME.players[shooter].score + STRIKER_FOUL);
+        FloatingText.spawn(pocket.x, pocket.y - 20, `${STRIKER_FOUL}`, '#dc2626');
+        Toast.show(`Foul! Striker pocketed · ${STRIKER_FOUL} pts`, 'error', '⚠');
+        this.updateScores();
+        if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
+          Network.broadcast({ type: 'score_update', playerIndex: shooter, score: GAME.players[shooter].score });
+        }
+      } else {
+        AudioManager.play('puck_pocket', { pan });
+        const pts = body.points || 0;
+        GAME.players[shooter].score += pts;
+        this.turnPocketed++;
+        this.updateScores();
+        FloatingText.spawn(pocket.x, pocket.y - 20, `+${pts}`, PLAYER_COLORS[shooter]);
+        if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
+          Network.broadcast({ type: 'score_update', playerIndex: shooter, score: GAME.players[shooter].score });
+        }
       }
-      return;
-    }
-
-    AudioManager.play('puck_pocket', { pan });
-    const pts = body.points || 0;
-    GAME.players[GAME.currentTurn].score += pts;
-    this.turnPocketed++;
-    this.updateScores();
-    FloatingText.spawn(pocket.x, pocket.y - 20, `+${pts}`, PLAYER_COLORS[GAME.currentTurn]);
-    if (GAME.isHost && GAME.mode === 'playing' && !GAME.isPractice) {
-      Network.broadcast({
-        type: 'score_update',
-        playerIndex: GAME.currentTurn,
-        score: GAME.players[GAME.currentTurn].score
-      });
     }
   },
 
@@ -1247,6 +1328,7 @@ const Game = {
     this.turnPocketed = 0;
 
     if (!keepTurn) GAME.currentTurn = (GAME.currentTurn + 1) % GAME.activePlayers;
+    this.currentTurnAtShot = GAME.currentTurn;
     Physics.striker = Physics.createStriker(GAME.currentTurn, 0.5);
 
     if (GAME.mode === 'playing' && !GAME.isPractice && GAME.isHost) {
@@ -1557,9 +1639,9 @@ const UI = {
     GAME.mode = 'host'; GAME.isHost = true; GAME.isPractice = false; GAME.myPlayerIndex = 0;
     GAME.localMode = null; GAME.activePlayers = 3;
     GAME.players = [
-      { id: 'me', connected: true, score: 0 },
-      { id: null, connected: false, score: 0 },
-      { id: null, connected: false, score: 0 }
+      { id: 'me', connected: true, ready: true, score: 0 },
+      { id: null, connected: false, ready: false, score: 0 },
+      { id: null, connected: false, ready: false, score: 0 }
     ];
     document.getElementById('createModal').classList.remove('hidden');
     document.getElementById('roomCodeDisplay').textContent = '----';
@@ -1601,9 +1683,9 @@ const UI = {
     GAME.myPlayerIndex = 0; GAME.currentTurn = 0;
     GAME.activePlayers = 3;
     GAME.players = [
-      { id: 'me', connected: true, score: 0 },
-      { id: 'p2', connected: true, score: 0 },
-      { id: 'p3', connected: true, score: 0 }
+      { id: 'me', connected: true, ready: true, score: 0 },
+      { id: 'p2', connected: true, ready: true, score: 0 },
+      { id: 'p3', connected: true, ready: true, score: 0 }
     ];
     this.enterGame();
   },
@@ -1615,9 +1697,9 @@ const UI = {
     GAME.myPlayerIndex = 0; GAME.currentTurn = 0;
     GAME.activePlayers = 2;
     GAME.players = [
-      { id: 'me', connected: true, score: 0 },
-      { id: 'p2', connected: true, score: 0 },
-      { id: 'p3', connected: false, score: 0 }
+      { id: 'me', connected: true, ready: true, score: 0 },
+      { id: 'p2', connected: true, ready: true, score: 0 },
+      { id: 'p3', connected: false, ready: false, score: 0 }
     ];
     this.enterGame();
   },
@@ -1629,6 +1711,7 @@ const UI = {
     const idx = GAME.players.findIndex(p => p.id === conn.peer);
     if (idx > 0) {
       GAME.players[idx].connected = false;
+      GAME.players[idx].ready = false;
       GAME.players[idx].id = null;
       this.updateFriendSlots();
       Network.broadcast({ type: 'players_update', players: GAME.players });
@@ -1643,8 +1726,17 @@ const UI = {
         const slot = GAME.players.findIndex((p, i) => i > 0 && !p.connected);
         if (slot < 0) { Network.sendTo(conn, { type: 'room_full' }); return; }
         GAME.players[slot].connected = true;
+        GAME.players[slot].ready = true;
         GAME.players[slot].id = conn.peer;
-        Network.sendTo(conn, { type: 'welcome', playerIndex: slot, players: GAME.players, roomCode: GAME.roomCode });
+        Network.sendTo(conn, {
+          type: 'welcome',
+          playerIndex: slot,
+          players: GAME.players,
+          roomCode: GAME.roomCode,
+          /* Late-join initial snapshot so nothing flickers */
+          snapshot: Physics.snapshot(),
+          currentTurn: GAME.currentTurn
+        });
         Network.broadcast({ type: 'players_update', players: GAME.players });
         this.updateFriendSlots();
         Toast.show('P' + (slot + 1) + ' joined', 'success', '🎉');
@@ -1655,9 +1747,14 @@ const UI = {
         GAME.myPlayerIndex = data.playerIndex;
         GAME.players = data.players;
         GAME.roomCode = data.roomCode;
+        if (data.snapshot) Physics.applySnapshot(data.snapshot);
+        if (typeof data.currentTurn === 'number') GAME.currentTurn = data.currentTurn;
         document.getElementById('connectingOverlay').classList.add('hidden');
         Toast.show('Connected as ' + playerLabel(GAME.myPlayerIndex), 'success', '🎉');
-        setTimeout(() => Game.updateScores(), 100);
+        setTimeout(() => {
+          Game.updateScores();
+          Game.updateTurnUI();
+        }, 100);
         break;
       case 'room_full':
         document.getElementById('connectingOverlay').classList.add('hidden');
@@ -1699,8 +1796,13 @@ const UI = {
         GAME.currentTurn = data.currentTurn;
         if (data.players) GAME.players = data.players;
         Physics.striker = Physics.createStriker(GAME.currentTurn, 0.5);
+        Game.currentTurnAtShot = GAME.currentTurn;
         Game.isResolving = false;
         Game.updateScores(); Game.updateTurnUI(); Game.updateAdjustSlider(); Game.updateWaitBar();
+        /* If the local player was dragging when the turn changed, re-broadcast */
+        if (Physics.striker && GAME.currentTurn === GAME.myPlayerIndex) {
+          Network.broadcast({ type: 'striker_move', player: GAME.myPlayerIndex, x: Physics.striker.x, y: Physics.striker.y });
+        }
         break;
       case 'score_update':
         if (GAME.players[data.playerIndex]) {
@@ -1709,7 +1811,7 @@ const UI = {
         }
         break;
       case 'chat_message':
-        if (data.player !== GAME.myPlayerIndex) this.showMessage(data.text);
+        this.showMessage(data.text);
         break;
       case 'game_over':
         GAME.players = data.players;
@@ -1720,12 +1822,27 @@ const UI = {
       case 'request_play_again':
         if (GAME.isHost) { Network.broadcast({ type: 'play_again' }); this.playAgain(true); }
         break;
+      case 'ping':
+        Network._lastPingReceived = Date.now();
+        if (GAME.isHost) Network.sendTo(conn, { type: 'pong', t: data.t });
+        break;
+      case 'pong':
+        Network._lastPingReceived = Date.now();
+        break;
     }
   },
 
-  onNetError() {
+  onNetError(err) {
     document.getElementById('connectingOverlay').classList.add('hidden');
-    Toast.show('Network error', 'error', '✕');
+    if (err && err.message === 'heartbeat-lost') {
+      Toast.show('Connection lost', 'error', '⚡');
+      Network.disconnect();
+      GAME.mode = 'menu';
+      document.getElementById('gameScreen').classList.add('hidden');
+      document.getElementById('mainMenu').classList.remove('hidden');
+    } else {
+      Toast.show('Network error', 'error', '✕');
+    }
   },
 
   updateFriendSlots() {
@@ -1735,17 +1852,21 @@ const UI = {
       const avatar = slot.querySelector('.fs-avatar');
       const name = slot.querySelector('.fs-name');
       const tag = slot.querySelector('.fs-tag');
-      if (p.connected) {
+      if (p.connected && p.ready) {
         slot.classList.add('connected');
         avatar.classList.remove('empty'); avatar.textContent = (idx + 1);
         name.textContent = 'P' + (idx + 1); tag.textContent = 'Ready';
+      } else if (p.connected) {
+        slot.classList.remove('connected');
+        avatar.classList.add('empty'); avatar.textContent = (idx + 1);
+        name.textContent = 'Connecting…'; tag.textContent = 'Handshaking';
       } else {
         slot.classList.remove('connected');
         avatar.classList.add('empty'); avatar.textContent = (idx + 1);
         name.textContent = 'Waiting…'; tag.textContent = 'Not connected';
       }
     });
-    const count = GAME.players.filter(p => p.connected).length;
+    const count = GAME.players.filter(p => p.connected && p.ready).length;
     const btn = document.getElementById('startGameBtn');
     const btnText = document.getElementById('startBtnText');
     const hint = document.getElementById('waitingHint');
@@ -1808,7 +1929,7 @@ const UI = {
   },
 
   startGame() {
-    const count = GAME.players.filter(p => p.connected).length;
+    const count = GAME.players.filter(p => p.connected && p.ready).length;
     if (count < 3) { Toast.show('Need 3 players', 'error', '⚠'); return; }
     GAME.currentTurn = 0;
     AudioManager.play('click');
@@ -1829,7 +1950,6 @@ const UI = {
     Game.updateScores();
     Game.updateTurnUI();
     Game.start();
-    /* Ensure the 2P chip visibility is applied after the game starts */
     Game.updateTurnUI();
     Toast.show(
       GAME.localMode === 'local2p' ? '2P Local mode' :
@@ -1855,9 +1975,9 @@ const UI = {
     GAME.currentTurn = 0; GAME.myPlayerIndex = 0;
     GAME.localMode = null; GAME.activePlayers = 3;
     GAME.players = [
-      { id: 'me', connected: true, score: 0 },
-      { id: null, connected: false, score: 0 },
-      { id: null, connected: false, score: 0 }
+      { id: 'me', connected: true, ready: true, score: 0 },
+      { id: null, connected: false, ready: false, score: 0 },
+      { id: null, connected: false, ready: false, score: 0 }
     ];
     document.getElementById('gameScreen').classList.add('hidden');
     document.getElementById('mainMenu').classList.remove('hidden');
@@ -1866,6 +1986,7 @@ const UI = {
     document.getElementById('joinModal').classList.add('hidden');
     document.getElementById('connectingOverlay').classList.add('hidden');
     Physics.pucks = []; Physics.striker = null;
+    Physics._pocketEvents = [];
     Renderer.pocketPops = [];
     FloatingText.items = [];
     Game.isResolving = false;
@@ -1880,11 +2001,13 @@ const UI = {
     GAME.currentTurn = 0;
     Physics.pucks = Physics.createPucks();
     Physics.striker = Physics.createStriker(0, 0.5);
+    Physics._pocketEvents = [];
     Renderer.pocketPops = [];
     FloatingText.items = [];
     Game.isResolving = false;
     Game.ended = false;
     Game._ending = false;
+    Game.currentTurnAtShot = 0;
     Game.updateScores(); Game.updateTurnUI(); Game.updateAdjustSlider(); Game.updateWaitBar();
     if (!fromRemote && GAME.mode === 'playing') {
       if (GAME.isHost) Network.broadcast({ type: 'play_again' });
@@ -1894,9 +2017,13 @@ const UI = {
 
   sendMessage(text) {
     AudioManager.play('click');
-    this.showMessage(text);
-    if (GAME.mode === 'playing' && !GAME.isPractice) {
+    if (GAME.mode === 'local' || GAME.isPractice) {
+      this.showMessage(text);
+    } else if (GAME.mode === 'playing') {
+      /* Echo through host so we know it was delivered, and no double-render */
       Network.broadcast({ type: 'chat_message', text, player: GAME.myPlayerIndex });
+    } else {
+      this.showMessage(text);
     }
   },
 
