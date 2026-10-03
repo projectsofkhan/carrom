@@ -1,13 +1,12 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P • v15
-   • Host-authoritative physics (kept from v13/v14)
-   • Rotated UI for the friend in local 2P (chips, adjuster,
-     power bar, mute button, floating points & toasts)
-   • Both sides have a mute button
-   • Friend has their own striker adjuster + power bar
+   CARROM 3P • v16
+   • Symmetric local 2P: HUD top (P2) + HUD bottom (P1)
+     Both have chip (name+score), mute button, fullscreen button
+   • The active player's HUD flips right-side up for that player
+   • Fullscreen toggle added (works cross-browser)
+   • Mute button on both sides
    • Very-low-energy striker ends the turn immediately
-   • Removed the redundant bottom "Your turn" line
-   • Chip shows name+score for both players
+   • Host-authoritative netcode, online kept intact
 ═══════════════════════════════════════════════════════════ */
 
 const WIN_SCORE = 100;
@@ -180,13 +179,13 @@ const Network = {
   onData: null, onError: null, onPeerJoin: null, onPeerLeave: null,
 
   generateCode() { return String(Math.floor(1000 + Math.random() * 9000)); },
-  generateClientId() { return 'c15-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
+  generateClientId() { return 'c16-cli-' + Math.random().toString(36).slice(2, 9) + '-' + Date.now(); },
 
   initHost(cb) {
     this.isHost = true;
     this.roomCode = this.generateCode();
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const peerId = 'c15-' + this.roomCode;
+    const peerId = 'c16-' + this.roomCode;
     return new Promise((resolve, reject) => {
       let settled = false, attempts = 0;
       const maxAttempts = 6;
@@ -233,7 +232,7 @@ const Network = {
     this.isHost = false;
     this.roomCode = roomCode;
     Object.assign(this, { onData: cb.onData, onError: cb.onError, onPeerJoin: cb.onPeerJoin, onPeerLeave: cb.onPeerLeave });
-    const hostPeerId = 'c15-' + roomCode;
+    const hostPeerId = 'c16-' + roomCode;
     const clientId = this.generateClientId();
     return new Promise((resolve, reject) => {
       let settled = false, retries = 0;
@@ -341,7 +340,7 @@ const Physics = {
   WALL_BOUNCE: 0.8,
   MIN_SPEED: 0.05,
   ALMOST_STOP_SPEED: 0.35,
-  DEAD_STRIKER_SPEED: 0.5,
+  DEAD_STRIKER_SPEED: 0.6,
   MAX_POWER: 26,
   RESTITUTION: 0.94,
 
@@ -634,8 +633,6 @@ const Physics = {
     return true;
   },
 
-  /* All non-striker bodies effectively stopped AND striker below the dead
-     threshold → caller can end the turn immediately. */
   strikerAlmostDead() {
     if (this.striker && this.striker.active) {
       const sp = Math.hypot(this.striker.vx, this.striker.vy);
@@ -683,7 +680,7 @@ const Physics = {
   }
 };
 
-/* ───────── RENDERER ───────── */
+/* ───────── RENDERER (unchanged from v15) ───────── */
 const Renderer = {
   canvas: null, ctx: null, W: 700, H: 700, time: 0, pocketPops: [],
 
@@ -1180,8 +1177,6 @@ const Game = {
       if (this.isResolving) {
         const elapsed = t - this.resolveStartTime;
 
-        /* If the striker is the only thing moving and it's basically dead,
-           end the turn right away (no waiting for full stop). */
         if (Physics.strikerAlmostDead() && !Physics.anyBodyApproachingPocket()) {
           Physics.snapAll();
           this.isResolving = false;
@@ -1259,7 +1254,6 @@ const Game = {
       this.turnHadFoul = true;
       const idx = GAME.currentTurn;
       GAME.players[idx].score = Math.max(0, GAME.players[idx].score + STRIKER_FOUL);
-      /* Float the −20 in the shooter's orientation */
       FloatingText.spawn(pocket.x, pocket.y - 20, `${STRIKER_FOUL}`, '#dc2626', idx);
       Toast.show(`Foul! Striker pocketed · ${STRIKER_FOUL} pts`, 'error', '⚠');
       this.updateScores();
@@ -1378,6 +1372,7 @@ const Game = {
   updatePower(p) {
     const fill = document.getElementById('powerFill');
     const row = document.getElementById('powerRow');
+    if (!fill || !row) return;
     fill.style.width = (p * 100) + '%';
     row.classList.toggle('active', p > 0.05);
   },
@@ -1397,44 +1392,63 @@ const Game = {
       c.classList.toggle('hidden-chip', i >= GAME.activePlayers);
     });
 
-    /* Local chips */
-    const youChip = document.getElementById('youChip');
-    const youChipName = document.getElementById('youChipName');
-    const youChipScore = document.getElementById('youChipScore');
-    const youChipDot = document.getElementById('youChipDot');
-    const friendChip = document.getElementById('friendChip');
-    const friendChipName = document.getElementById('friendChipName');
-    const friendChipScore = document.getElementById('friendChipScore');
-    const friendChipDot = document.getElementById('friendChipDot');
+    /* HUD chips (local 2P / 3P) */
+    const bottomChip = document.getElementById('bottomChip');
+    const bottomChipName = document.getElementById('bottomChipName');
+    const bottomChipScore = document.getElementById('bottomChipScore');
+    const bottomChipDot = document.getElementById('bottomChipDot');
+    const bottomHudInner = document.getElementById('hudBottomInner');
+    const topChip = document.getElementById('topChip');
+    const topChipName = document.getElementById('topChipName');
+    const topChipScore = document.getElementById('topChipScore');
+    const topChipDot = document.getElementById('topChipDot');
+    const topHudInner = document.getElementById('hudTopInner');
 
     if (isLocalMode()) {
-      if (youChip) {
-        youChip.classList.toggle('active', GAME.currentTurn === 0);
+      if (bottomChip) {
+        bottomChip.classList.remove('hidden');
+        bottomChip.classList.toggle('active', GAME.currentTurn === 0);
       }
-      if (youChipDot) youChipDot.style.background = PLAYER_COLORS[0];
-      if (youChipName) youChipName.textContent = 'YOU';
-      if (youChipScore) youChipScore.textContent = GAME.players[0].score;
+      if (bottomChipDot) bottomChipDot.style.background = PLAYER_COLORS[0];
+      if (bottomChipName) bottomChipName.textContent = 'You';
+      if (bottomChipScore) bottomChipScore.textContent = GAME.players[0].score;
 
       if (is2PLocal()) {
-        if (friendChip) {
-          friendChip.classList.remove('hidden');
-          friendChip.classList.toggle('active', GAME.currentTurn === 1);
+        if (topChip) {
+          topChip.classList.remove('hidden');
+          topChip.classList.toggle('active', GAME.currentTurn === 1);
         }
-        if (friendChipDot) friendChipDot.style.background = PLAYER_COLORS[1];
-        if (friendChipName) friendChipName.textContent = 'P2';
-        if (friendChipScore) friendChipScore.textContent = GAME.players[1].score;
+        if (topChipDot) topChipDot.style.background = PLAYER_COLORS[1];
+        if (topChipName) topChipName.textContent = 'P2';
+        if (topChipScore) topChipScore.textContent = GAME.players[1].score;
+
+        /* Rotate each HUD inner based on whose turn it is, so the current
+           player always reads their own info right-side up. */
+        if (topHudInner && bottomHudInner) {
+          if (GAME.currentTurn === 1) {
+            /* P2's turn: rotate BOTH sides so P2 reads right-side up. */
+            topHudInner.classList.add('rotated-180');
+            bottomHudInner.classList.add('rotated-180');
+          } else {
+            /* P1's turn: no rotation. */
+            topHudInner.classList.remove('rotated-180');
+            bottomHudInner.classList.remove('rotated-180');
+          }
+        }
       } else if (is3PLocal()) {
-        if (friendChip) {
-          friendChip.classList.remove('hidden');
-          friendChip.classList.remove('rotated-180');
-          friendChip.classList.toggle('active', GAME.currentTurn === 2);
+        /* 3P local: top chip shows P3 (no rotation, chip is at top). */
+        if (topChip) {
+          topChip.classList.remove('hidden');
+          topChip.classList.toggle('active', GAME.currentTurn === 2);
         }
-        if (friendChipDot) friendChipDot.style.background = PLAYER_COLORS[2];
-        if (friendChipName) friendChipName.textContent = 'P3';
-        if (friendChipScore) friendChipScore.textContent = GAME.players[2].score;
+        if (topChipDot) topChipDot.style.background = PLAYER_COLORS[2];
+        if (topChipName) topChipName.textContent = 'P3';
+        if (topChipScore) topChipScore.textContent = GAME.players[2].score;
+
+        /* No rotation in 3P: chips are not across from each other. */
+        if (topHudInner) topHudInner.classList.remove('rotated-180');
+        if (bottomHudInner) bottomHudInner.classList.remove('rotated-180');
       }
-    } else {
-      if (youChip) youChip.classList.add('hidden');
     }
 
     document.getElementById('boardFrame').classList.toggle(
@@ -1448,18 +1462,19 @@ const Game = {
     const thumb = document.getElementById('adjustThumb');
     const fill = document.getElementById('adjustFill');
     const track = document.getElementById('adjustTrack');
-    const isLocal = isLocalMode();
-    const isMyTurn = isLocal || GAME.currentTurn === GAME.myPlayerIndex;
-    /* In local 2P, "your" slider only makes sense when it's YOUR turn.
-       In local 3P, the slider always tracks the current local player. */
-    let visible = isMyTurn;
-    if (is2PLocal() && GAME.currentTurn !== 0) visible = false;
+    if (!row || !track) return;
+
+    /* P1's slider is only shown during P1's turn. */
+    const visible =
+      (GAME.mode === 'playing' && GAME.currentTurn === GAME.myPlayerIndex) ||
+      ((GAME.mode === 'local' || GAME.mode === 'practice') && GAME.currentTurn === 0);
     if (!visible || !Physics.striker || !Physics.striker.active || this.isResolving) {
-      row.classList.add('hidden'); return;
+      row.classList.add('hidden');
+      return;
     }
     row.classList.remove('hidden');
-    const slot = Physics.slotForPlayer(GAME.currentTurn);
-    const base = Physics.getBaseline(slot);
+
+    const base = Physics.getBaseline(0);
     let pct = 0.5;
     if (base.axis === 'x') pct = (Physics.striker.x - base.min) / (base.max - base.min);
     else pct = (Physics.striker.y - base.min) / (base.max - base.min);
@@ -1475,7 +1490,7 @@ const Game = {
         const rect = track.getBoundingClientRect();
         const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
         const rawPct = x / rect.width;
-        const free = Physics.findFreeBaselinePos(GAME.currentTurn, rawPct);
+        const free = Physics.findFreeBaselinePos(0, rawPct);
         const s = Physics.striker; if (!s || !s.active) return;
         s.x = free.x; s.y = free.y;
         thumb.style.left = (free.pct * 100) + '%';
@@ -1498,7 +1513,6 @@ const Game = {
     }
   },
 
-  /* Friend's slider (top, rotated). Only shown in local 2P when it's P2's turn. */
   updateFriendAdjustSlider() {
     const row = document.getElementById('friendAdjustRow');
     const thumb = document.getElementById('friendAdjustThumb');
@@ -1510,14 +1524,11 @@ const Game = {
     if (!show) { row.classList.add('hidden'); return; }
     row.classList.remove('hidden');
 
-    const slot = Physics.slotForPlayer(1);
-    const base = Physics.getBaseline(slot);
+    const base = Physics.getBaseline(2);
     let pct = 0.5;
     if (base.axis === 'x') pct = (Physics.striker.x - base.min) / (base.max - base.min);
     else pct = (Physics.striker.y - base.min) / (base.max - base.min);
     pct = Math.max(0, Math.min(1, pct));
-    /* Because the row is rotated 180°, we mirror the thumb so P2's left/right
-       still matches the on-screen direction after they mentally flip. */
     thumb.style.left = (pct * 100) + '%';
     fill.style.width = (pct * 100) + '%';
 
@@ -1525,14 +1536,10 @@ const Game = {
       track.dataset.bound = '1';
       let dragging = false;
       const updateFromClientX = (clientX) => {
-        if (!isAuthority() && GAME.currentTurn !== 0) {
-          /* P2's slider is only meaningful locally. In online play this row is hidden. */
-        }
         const rect = track.getBoundingClientRect();
         const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
         let rawPct = x / rect.width;
-        /* Because the row is rotated, invert the pct to keep P2's mental model consistent. */
-        rawPct = 1 - rawPct;
+        rawPct = 1 - rawPct; /* mirror because rotated */
         const free = Physics.findFreeBaselinePos(1, rawPct);
         const s = Physics.striker; if (!s || !s.active) return;
         s.x = free.x; s.y = free.y;
@@ -1577,13 +1584,13 @@ const Game = {
       chip.classList.toggle('hidden-chip', !visible);
     });
 
-    /* Local chips */
-    const youChipScore = document.getElementById('youChipScore');
-    if (youChipScore) youChipScore.textContent = GAME.players[0].score;
-    const friendChipScore = document.getElementById('friendChipScore');
-    if (friendChipScore) {
-      if (is2PLocal()) friendChipScore.textContent = GAME.players[1].score;
-      else if (is3PLocal()) friendChipScore.textContent = GAME.players[2].score;
+    /* Local HUD chips */
+    const bottomChipScore = document.getElementById('bottomChipScore');
+    if (bottomChipScore) bottomChipScore.textContent = GAME.players[0].score;
+    const topChipScore = document.getElementById('topChipScore');
+    if (topChipScore) {
+      if (is2PLocal()) topChipScore.textContent = GAME.players[1].score;
+      else if (is3PLocal()) topChipScore.textContent = GAME.players[2].score;
     }
   }
 };
@@ -1591,7 +1598,6 @@ const Game = {
 /* ───────── FLOATING POINTS TEXT ───────── */
 const FloatingText = {
   items: [],
-  /* rotation: 0 or PI (per player) */
   spawn(x, y, text, color, playerIndex = 0) {
     const rot = (is2PLocal() && playerIndex === 1) ? Math.PI : 0;
     this.items.push({ x, y, text, color, life: 1, vy: -1.4, rot });
@@ -1639,43 +1645,48 @@ const UI = {
     document.getElementById('startGameBtn').addEventListener('click', () => this.startGame());
     document.getElementById('connectBtn').addEventListener('click', () => this.connect());
     document.getElementById('backBtn').addEventListener('click', () => this.quit());
-    document.getElementById('soundToggle').addEventListener('click', () => this.toggleSound('you'));
-    document.getElementById('friendSoundToggle').addEventListener('click', () => this.toggleSound('friend'));
+    document.getElementById('soundToggle').addEventListener('click', () => this.toggleSound());
+    document.getElementById('topMuteBtn').addEventListener('click', () => this.toggleSound());
+    document.getElementById('bottomMuteBtn').addEventListener('click', () => this.toggleSound());
+    document.getElementById('topFsBtn').addEventListener('click', () => this.toggleFullscreen());
+    document.getElementById('bottomFsBtn').addEventListener('click', () => this.toggleFullscreen());
     document.getElementById('playAgainBtn').addEventListener('click', () => this.playAgain(false));
     document.getElementById('goMenuBtn').addEventListener('click', () => this.goMenu());
     this.setupDigitInputs();
     this.setupChatDropdown();
+    this.refreshMuteIcons();
   },
 
   applyLayoutForMode() {
     const playersRow = document.getElementById('playersRow');
     const chatToggle = document.getElementById('chatToggle');
     const gameTopbar = document.getElementById('gameTopbar');
-    const friendZone = document.getElementById('friendZone');
-    const youChip = document.getElementById('youChip');
+    const hudTop = document.getElementById('hudTop');
+    const hudBottom = document.getElementById('hudBottom');
     const legendRow = document.getElementById('legendRow');
 
     if (isLocalMode()) {
       playersRow.classList.add('hidden-row');
       chatToggle.classList.add('hidden-toggle');
-      gameTopbar.classList.add('compact');
-      friendZone.classList.remove('hidden');
-      if (is2PLocal()) {
-        /* Rotate the whole friend zone so the friend reads it right-side up */
-        friendZone.classList.add('rotated-180');
-      } else {
-        friendZone.classList.remove('rotated-180');
-      }
+      gameTopbar.classList.add('hidden-bar');
+      hudTop.classList.remove('hidden');
+      hudBottom.classList.remove('hidden');
       if (legendRow) legendRow.classList.add('hidden-row');
     } else {
       playersRow.classList.remove('hidden-row');
       chatToggle.classList.remove('hidden-toggle');
-      gameTopbar.classList.remove('compact');
-      friendZone.classList.add('hidden');
-      friendZone.classList.remove('rotated-180');
-      if (youChip) youChip.classList.add('hidden');
+      gameTopbar.classList.remove('hidden-bar');
+      hudTop.classList.add('hidden');
+      hudBottom.classList.add('hidden');
       if (legendRow) legendRow.classList.remove('hidden-row');
     }
+  },
+
+  refreshMuteIcons() {
+    const onIds = ['soundOnIcon', 'topMuteOnIcon', 'bottomMuteOnIcon'];
+    const offIds = ['soundOffIcon', 'topMuteOffIcon', 'bottomMuteOffIcon'];
+    onIds.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = GAME.audioEnabled ? 'block' : 'none'; });
+    offIds.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = GAME.audioEnabled ? 'none' : 'block'; });
   },
 
   setupChatDropdown() {
@@ -2101,17 +2112,30 @@ const UI = {
     );
   },
 
-  toggleSound(who) {
+  toggleSound() {
     GAME.audioEnabled = !GAME.audioEnabled;
-    const onYou = document.getElementById('soundOnIcon');
-    const offYou = document.getElementById('soundOffIcon');
-    const onFr = document.getElementById('friendSoundOnIcon');
-    const offFr = document.getElementById('friendSoundOffIcon');
-    if (onYou) onYou.style.display = GAME.audioEnabled ? 'block' : 'none';
-    if (offYou) offYou.style.display = GAME.audioEnabled ? 'none' : 'block';
-    if (onFr) onFr.style.display = GAME.audioEnabled ? 'block' : 'none';
-    if (offFr) offFr.style.display = GAME.audioEnabled ? 'none' : 'block';
+    this.refreshMuteIcons();
     if (GAME.audioEnabled) AudioManager.play('click');
+  },
+
+  async toggleFullscreen() {
+    AudioManager.init(); AudioManager.play('click');
+    try {
+      const doc = document;
+      const el = doc.documentElement;
+      const isFs = doc.fullscreenElement || doc.webkitFullscreenElement || doc.msFullscreenElement;
+      if (!isFs) {
+        if (el.requestFullscreen) await el.requestFullscreen();
+        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+        else if (el.msRequestFullscreen) el.msRequestFullscreen();
+      } else {
+        if (doc.exitFullscreen) await doc.exitFullscreen();
+        else if (doc.webkitExitFullscreen) doc.webkitExitFullscreen();
+        else if (doc.msExitFullscreen) doc.msExitFullscreen();
+      }
+    } catch (e) {
+      /* Fullscreen not available on this device — silently ignore */
+    }
   },
 
   quit() { if (confirm('Leave the game?')) this.goMenu(); },
