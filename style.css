@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════
-   CARROM 3P • v14  •  COMPLETE stylesheet
+   CARROM 3P • v15  •  COMPLETE stylesheet
 ═══════════════════════════════════════════════════════════ */
 
 *, *::before, *::after {
@@ -252,15 +252,36 @@ button { cursor: pointer; user-select: none; }
 .chat-item:hover { background: var(--gold-soft); color: var(--gold-2); }
 .chat-item:active { transform: scale(0.98); }
 
-/* Side chips (used in local 2P / 3P) */
+/* FRIEND ZONE (top, rotated 180) */
+.friend-zone {
+  display: flex; flex-direction: column; align-items: stretch;
+  gap: 4px;
+  padding: 4px 14px 2px;
+  flex-shrink: 0;
+  position: relative;
+}
+.friend-zone.hidden { display: none; }
+
+.rotated-180 { transform: rotate(180deg); }
+
+/* YOU ZONE (bottom) */
+.you-zone {
+  display: flex; flex-direction: column; align-items: stretch;
+  gap: 4px;
+  padding: 2px 14px 12px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  flex-shrink: 0;
+}
+
+/* Side chips */
 .side-chip {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 10px;
   padding: 6px 14px;
   background: #ffffff;
   border: 1px solid var(--line);
   border-radius: var(--r-full);
   align-self: center;
-  margin: 4px auto 6px;
+  margin: 2px auto 2px;
   font-size: 12px; font-weight: 800; letter-spacing: 0.08em;
   color: var(--txt-1);
   transition: all var(--t-2);
@@ -271,24 +292,17 @@ button { cursor: pointer; user-select: none; }
   border-color: #f4dcae;
 }
 .side-chip.hidden { display: none; }
-.side-chip.rotated-180 { transform: rotate(180deg); }
 .sc-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 .sc-name { font-size: 11px; letter-spacing: 0.12em; color: var(--txt-2); }
 .sc-score { font-size: 15px; font-weight: 900; color: var(--txt-1); }
 
-/* Side turn indicators (bottom for friend) */
-.side-turn {
-  display: flex; align-items: center; justify-content: center;
-  gap: 8px;
-  padding: 4px 12px 8px;
-  font-size: 11px; font-weight: 800; letter-spacing: 0.12em;
-  color: var(--txt-2);
-  flex-shrink: 0;
+/* Friend controls (mute button, rotated) */
+.friend-controls {
+  position: absolute;
+  right: 14px;
+  bottom: -6px;
+  display: flex; gap: 8px;
 }
-.side-turn.hidden { display: none; }
-.side-turn.rotated-180 { transform: rotate(180deg); }
-.st-swatch { width: 9px; height: 9px; border-radius: 50%; }
-.st-label { letter-spacing: 0.12em; }
 
 /* Player chips (online) */
 .players-row { display: flex; gap: 8px; padding: 0 14px 8px; flex-shrink: 0; }
@@ -303,6 +317,7 @@ button { cursor: pointer; user-select: none; }
 
 /* Legend */
 .legend-row { display: flex; justify-content: center; align-items: center; gap: 8px; padding: 0 14px 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: var(--txt-2); flex-shrink: 0; flex-wrap: wrap; }
+.legend-row.hidden-row { display: none; }
 .legend-item { display: inline-flex; align-items: center; gap: 5px; }
 .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .legend-white { background: #ffffff; border: 1px solid #c9c9c9; }
@@ -317,7 +332,7 @@ button { cursor: pointer; user-select: none; }
 #gameCanvas { display: block; width: 100%; height: 100%; border-radius: 10px; background: #fffdf6; touch-action: none; cursor: crosshair; }
 
 /* Wait bar */
-.wait-bar { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 9px 14px; margin: 8px 14px 0; background: var(--gold-soft); border: 1px solid #f4dcae; border-radius: var(--r-full); flex-shrink: 0; animation: fadeIn 0.25s ease; }
+.wait-bar { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 9px 14px; margin: 6px 14px 0; background: var(--gold-soft); border: 1px solid #f4dcae; border-radius: var(--r-full); flex-shrink: 0; animation: fadeIn 0.25s ease; }
 .wait-bar.hidden { display: none; }
 .wb-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gold); animation: pulse 1.4s ease-in-out infinite; }
 .wb-text { font-size: 11px; font-weight: 800; letter-spacing: 0.12em; color: var(--gold-2); animation: pulse 2s ease-in-out infinite; }
@@ -338,10 +353,7 @@ button { cursor: pointer; user-select: none; }
 .power-track { position: relative; flex: 1; height: 6px; background: #eef1f5; border-radius: var(--r-full); overflow: hidden; }
 .power-fill { position: absolute; inset: 0; width: 0%; background: var(--gold); border-radius: var(--r-full); transition: width 0.08s linear; }
 
-/* Turn indicator (you, bottom) */
-.turn-row { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 4px 14px 12px; flex-shrink: 0; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
-.turn-swatch { width: 10px; height: 10px; border-radius: 50%; transition: background var(--t-2); }
-.turn-label { font-size: 12px; font-weight: 800; letter-spacing: 0.12em; color: var(--txt-2); }
+/* (turn-row removed in v15) */
 
 /* Game over */
 .gameover { position: absolute; inset: 0; z-index: 200; background: rgba(255,255,255,0.9); display: flex; align-items: center; justify-content: center; padding: 16px; animation: fadeIn 0.3s ease; }
@@ -391,7 +403,6 @@ button { cursor: pointer; user-select: none; }
 @media (max-height: 720px) {
   .board-wrap { padding: 0 10px; }
   .players-row { padding-bottom: 6px; }
-  .turn-row { padding-bottom: 8px; }
   .adjust-row { padding: 4px 18px; }
   .power-row { padding: 5px 18px; }
   .wait-bar { padding: 7px 12px; }
